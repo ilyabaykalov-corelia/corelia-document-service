@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
 import ru.corelia.profile.ProductProfile;
+import ru.corelia.support.LogJson;
 import ru.corelia.transport.ServiceClient;
 
 import tools.jackson.databind.JsonNode;
@@ -114,6 +115,13 @@ public class DocumentService {
                         object("typeCode", type, "documentId", id, "attributes", attributes),
                         auth);
         String instanceId = text(instance, "id");
+        LogJson.info(
+                "Platform V document process start response",
+                object(
+                        "documentId", id,
+                        "documentType", type,
+                        "processInstanceId", instanceId,
+                        "state", text(instance, "state")));
         JsonNode definition = profile.type(type), variables = instance.path("globalVariables");
         String returned =
                 text(
@@ -171,15 +179,30 @@ public class DocumentService {
             } catch (ApiException error) {
                 if (error.status() != 404) throw error;
             }
-            if (!instanceId.isEmpty() && attempt % 3 == 0)
-                services.call(
-                        "workflow",
-                        "/internal/v1/processes/" + encode(instanceId),
-                        "GET",
-                        null,
-                        auth);
+            if (!instanceId.isEmpty() && attempt % 3 == 0) {
+                try {
+                    services.call(
+                            "workflow",
+                            "/internal/v1/processes/" + encode(instanceId),
+                            "GET",
+                            null,
+                            auth);
+                } catch (ApiException error) {
+                    LogJson.info(
+                            "Platform V process instance status is unavailable",
+                            object(
+                                    "documentId", id,
+                                    "processInstanceId", instanceId,
+                                    "status", error.status(),
+                                    "message", error.getMessage()));
+                    throw error;
+                }
+            }
             pause(500);
         }
+        LogJson.info(
+                "Platform V process did not create document in time",
+                object("documentId", id, "processInstanceId", instanceId));
         throw new ApiException(
                 502,
                 "Процесс запущен, но карточка документа "
