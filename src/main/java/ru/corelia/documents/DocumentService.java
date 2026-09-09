@@ -6,7 +6,7 @@ import org.springframework.stereotype.Service;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.profile.ProductProfile;
+import ru.corelia.integration.PdsContract;
 import ru.corelia.support.LogJson;
 import ru.corelia.transport.ServiceClient;
 
@@ -19,30 +19,26 @@ import java.util.*;
 @Service
 public class DocumentService {
     private final DocumentRepository repository;
-    private final ProductProfile profile;
     private final ServiceClient services;
 
-    public DocumentService(
-            DocumentRepository repository, ProductProfile profile, ServiceClient services) {
+    public DocumentService(DocumentRepository repository, ServiceClient services) {
         this.repository = repository;
-        this.profile = profile;
         this.services = services;
     }
 
     public JsonNode get(String type, String id, AuthContext auth) {
-        profile.requireOperation(type, "read");
+        PdsContract.requireType(type);
         return repository.get(type, id, auth);
     }
 
     public JsonNode search(String type, JsonNode payload, AuthContext auth) {
-        profile.requireOperation(type, "search");
-        JsonNode definition = profile.type(type);
+        PdsContract.requireType(type);
         String query = text(payload, "query").toLowerCase(Locale.ROOT),
-                status = profile.status(type, text(payload, "status"));
+                status = PdsContract.status(text(payload, "status"));
         String from = date(text(payload, "dateFrom")),
                 to = date(text(payload, "dateTo")),
-                dateField = text(definition.path("search"), "dateField");
-        List<String> sorting = ProductProfile.strings(definition.path("search").path("sort"));
+                dateField = "contractDate";
+        List<String> sorting = List.of("contractDate", "contractNumber");
         List<JsonNode> result =
                 repository.all(type, auth).stream()
                         .filter(
@@ -61,19 +57,12 @@ public class DocumentService {
                                                             + text(doc, "statusLabel"))
                                                     .toLowerCase(Locale.ROOT)
                                                     .contains(query)) return true;
-                                    return definition.path("fields").properties().stream()
+                                    return PdsContract.FIELDS.stream()
                                             .anyMatch(
-                                                    e ->
-                                                            e.getValue()
-                                                                            .path("searchable")
-                                                                            .asBoolean()
-                                                                    && text(
-                                                                                    doc.path(
-                                                                                            "attributes"),
-                                                                                    e.getKey())
-                                                                            .toLowerCase(
-                                                                                    Locale.ROOT)
-                                                                            .contains(query));
+                                                    field ->
+                                                            text(doc.path("attributes"), field)
+                                                                    .toLowerCase(Locale.ROOT)
+                                                                    .contains(query));
                                 })
                         .sorted(
                                 (a, b) -> {
@@ -97,15 +86,15 @@ public class DocumentService {
     }
 
     public JsonNode update(String type, String id, JsonNode body, AuthContext auth) {
-        profile.requireOperation(type, "update");
-        JsonNode attributes = profile.validateAttributes(type, body.path("attributes"), true);
+        PdsContract.requireType(type);
+        JsonNode attributes = PdsContract.validateAttributes(body.path("attributes"), true);
         repository.update(type, id, attributes, auth);
         return get(type, id, auth);
     }
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
-        profile.requireOperation(type, "create");
-        JsonNode attributes = profile.validateAttributes(type, body.path("attributes"));
+        PdsContract.requireType(type);
+        JsonNode attributes = PdsContract.validateAttributes(body.path("attributes"), false);
         String id = UUID.randomUUID().toString();
         JsonNode instance =
                 services.call(
@@ -122,30 +111,16 @@ public class DocumentService {
                         "documentType", type,
                         "processInstanceId", instanceId,
                         "state", text(instance, "state")));
-        JsonNode definition = profile.type(type), variables = instance.path("globalVariables");
-        String returned =
-                text(
-                        unwrap(
-                                variables.path(
-                                        text(definition.path("process"), "documentIdVariable"))));
+        JsonNode variables = instance.path("globalVariables");
+        String returned = text(unwrap(variables.path("documentId")));
         if (!returned.isEmpty()) id = returned;
-        if (!text(unwrap(variables.path(text(definition.path("process"), "modelIdVariable"))))
-                .isEmpty()) {
+        if (!text(unwrap(variables.path("id"))).isEmpty()) {
             ObjectNode resultAttributes = copy(attributes);
-            definition
-                    .path("fields")
-                    .properties()
-                    .forEach(
-                            e -> {
-                                JsonNode value =
-                                        unwrap(
-                                                variables.path(
-                                                        profile.variableMapping(
-                                                                e.getValue(), e.getKey())));
-                                if (!value.isMissingNode() && !value.isNull())
-                                    resultAttributes.set(e.getKey(), value);
-                            });
-            String status = text(definition.path("status"), "default");
+            for (String field : PdsContract.FIELDS) {
+                JsonNode value = unwrap(variables.path(field));
+                if (!value.isMissingNode() && !value.isNull()) resultAttributes.set(field, value);
+            }
+            String status = PdsContract.INITIAL_STATUS;
             ObjectNode result =
                     object(
                             "id",
@@ -153,20 +128,17 @@ public class DocumentService {
                             "typeCode",
                             type,
                             "typeName",
-                            text(definition, "name"),
+                            PdsContract.NAME,
                             "attributes",
                             resultAttributes,
                             "status",
                             status,
                             "statusLabel",
-                            profile.label(type, status),
+                            PdsContract.label(status),
                             "processInstanceId",
                             instanceId);
             for (String field : List.of("createdBy", "createdAt")) {
-                JsonNode value =
-                        unwrap(
-                                variables.path(
-                                        text(definition.path("process"), field + "Variable")));
+                JsonNode value = unwrap(variables.path(field));
                 if (!value.isMissingNode() && !value.isNull()) result.set(field, value);
             }
             return result;
@@ -191,10 +163,14 @@ public class DocumentService {
                     LogJson.info(
                             "Platform V process instance status is unavailable",
                             object(
-                                    "documentId", id,
-                                    "processInstanceId", instanceId,
-                                    "status", error.status(),
-                                    "message", error.getMessage()));
+                                    "documentId",
+                                    id,
+                                    "processInstanceId",
+                                    instanceId,
+                                    "status",
+                                    error.status(),
+                                    "message",
+                                    error.getMessage()));
                     throw error;
                 }
             }
