@@ -69,11 +69,14 @@ public class PlatformDocumentRepository implements DocumentRepository {
         List<JsonNode> states = list(page.path("elems"));
         if (states.isEmpty()) throw new ApiException(409, "История карточки ещё не инициализирована в DataSpace");
         List<JsonNode> result = new ArrayList<>();
-        for (int index = states.size() - 1; index >= 0; index--) {
+        // DataSpace возвращает состояния от новых к старым. Публичный номер версии
+        // должен расти от первой сохранённой карточки к последней, поэтому для
+        // первой записи ответа назначаем максимальный номер.
+        for (int index = 0; index < states.size(); index++) {
             ObjectNode item = (ObjectNode) map(type, states.get(index));
-            item.put("version", index + 1);
-            item.put("historyId", text(states.get(index), "sysHistNumber"));
-            item.put("versionCreatedAt", text(states.get(index), "sysHistoryTime"));
+            item.put("version", states.size() - index);
+            item.put("historyId", scalar(states.get(index), "sysHistNumber"));
+            item.put("versionCreatedAt", scalar(states.get(index), "sysHistoryTime"));
             result.add(item);
         }
         return result;
@@ -124,5 +127,10 @@ public class PlatformDocumentRepository implements DocumentRepository {
         }
         if (!row.path("historyInitialized").isMissingNode()) document.set("historyInitialized", row.path("historyInitialized"));
         return document;
+    }
+
+    private static String scalar(JsonNode row, String field) {
+        JsonNode value = row.path(field);
+        return value.isValueNode() && !value.isNull() ? value.asString() : "";
     }
 }
