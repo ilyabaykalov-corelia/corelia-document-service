@@ -17,14 +17,17 @@ public class DocumentController {
     private final ru.corelia.integration.DataSpaceClient data;
     private final DocumentService documents;
     private final ApiRequest requests;
+    private final PlatformDocumentRepository repository;
 
     public DocumentController(
             DocumentService documents,
             ApiRequest requests,
-            ru.corelia.integration.DataSpaceClient data) {
+            ru.corelia.integration.DataSpaceClient data,
+            PlatformDocumentRepository repository) {
         this.data = data;
         this.documents = documents;
         this.requests = requests;
+        this.repository = repository;
     }
 
     @GetMapping("/document-types/available")
@@ -53,6 +56,19 @@ public class DocumentController {
     public JsonNode get(
             @PathVariable String type, @PathVariable String id, HttpServletRequest request) {
         return documents.get(type, id, requests.auth(request));
+    }
+
+    @GetMapping("/documents/{type}/{id}/versions")
+    public JsonNode versions(@PathVariable String type, @PathVariable String id, HttpServletRequest request) {
+        return ru.corelia.support.Json.array(repository.versions(type, id, requests.auth(request)));
+    }
+
+    @GetMapping("/documents/{type}/{id}/versions/{version}")
+    public JsonNode version(@PathVariable String type, @PathVariable String id, @PathVariable int version, HttpServletRequest request) {
+        return repository.versions(type, id, requests.auth(request)).stream()
+                .filter(item -> item.path("version").asInt() == version)
+                .findFirst()
+                .orElseThrow(() -> new ru.corelia.http.ApiException(404, "Версия документа не найдена"));
     }
 
     @PostMapping("/documents/{type}")

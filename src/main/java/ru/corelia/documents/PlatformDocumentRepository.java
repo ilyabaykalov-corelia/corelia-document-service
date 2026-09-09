@@ -61,6 +61,24 @@ public class PlatformDocumentRepository implements DocumentRepository {
         return map(type, find(type, id, auth));
     }
 
+    /** Возвращает исторические состояния карточки в порядке от новой версии к старой. */
+    public List<JsonNode> versions(String type, String id, AuthContext auth) {
+        PdsContract.requireType(type);
+        JsonNode page = data.query("documentStates", object("id", find(type, id, auth).path("id"), "offset", 0, "limit", 500), auth)
+                .path("getStatesPdsContract");
+        List<JsonNode> states = list(page.path("elems"));
+        if (states.isEmpty()) throw new ApiException(409, "История карточки ещё не инициализирована в DataSpace");
+        List<JsonNode> result = new ArrayList<>();
+        for (int index = states.size() - 1; index >= 0; index--) {
+            ObjectNode item = (ObjectNode) map(type, states.get(index));
+            item.put("version", index + 1);
+            item.put("historyId", text(states.get(index), "sysHistNumber"));
+            item.put("versionCreatedAt", text(states.get(index), "sysHistoryTime"));
+            result.add(item);
+        }
+        return result;
+    }
+
     public void update(String code, String id, JsonNode attributes, AuthContext auth) {
         JsonNode row = find(code, id, auth);
         ObjectNode input = object("id", text(row, "id"));
@@ -84,6 +102,8 @@ public class PlatformDocumentRepository implements DocumentRepository {
                 object(
                         "id",
                         id,
+                        "dataSpaceId",
+                        text(row, "id"),
                         "typeCode",
                         code,
                         "typeName",
@@ -98,6 +118,11 @@ public class PlatformDocumentRepository implements DocumentRepository {
             JsonNode value = row.path(field);
             if (!value.isMissingNode() && !value.isNull()) document.set(field, value);
         }
+        if (!row.path("attachmentsHead").isMissingNode()) {
+            JsonNode head = row.path("attachmentsHead");
+            document.put("attachmentsHead", head.isObject() ? text(head, "id") : text(head));
+        }
+        if (!row.path("historyInitialized").isMissingNode()) document.set("historyInitialized", row.path("historyInitialized"));
         return document;
     }
 }
