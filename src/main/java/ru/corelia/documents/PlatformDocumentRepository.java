@@ -61,27 +61,6 @@ public class PlatformDocumentRepository implements DocumentRepository {
         return map(type, find(type, id, auth));
     }
 
-    /** Возвращает исторические состояния карточки в порядке от новой версии к старой. */
-    public List<JsonNode> versions(String type, String id, AuthContext auth) {
-        PdsContract.requireType(type);
-        JsonNode page = data.query("documentStates", object("id", find(type, id, auth).path("id"), "offset", 0, "limit", 500), auth)
-                .path("getStatesPdsContract");
-        List<JsonNode> states = list(page.path("elems"));
-        if (states.isEmpty()) throw new ApiException(409, "История карточки ещё не инициализирована в DataSpace");
-        List<JsonNode> result = new ArrayList<>();
-        // DataSpace возвращает состояния от новых к старым. Публичный номер версии
-        // должен расти от первой сохранённой карточки к последней, поэтому для
-        // первой записи ответа назначаем максимальный номер.
-        for (int index = 0; index < states.size(); index++) {
-            ObjectNode item = (ObjectNode) map(type, states.get(index));
-            item.put("version", states.size() - index);
-            item.put("historyId", scalar(states.get(index), "sysHistNumber"));
-            item.put("versionCreatedAt", scalar(states.get(index), "sysHistoryTime"));
-            result.add(item);
-        }
-        return result;
-    }
-
     public void update(String code, String id, JsonNode attributes, AuthContext auth) {
         JsonNode row = find(code, id, auth);
         ObjectNode input = object("id", text(row, "id"));
@@ -105,8 +84,6 @@ public class PlatformDocumentRepository implements DocumentRepository {
                 object(
                         "id",
                         id,
-                        "dataSpaceId",
-                        text(row, "id"),
                         "typeCode",
                         code,
                         "typeName",
@@ -121,16 +98,6 @@ public class PlatformDocumentRepository implements DocumentRepository {
             JsonNode value = row.path(field);
             if (!value.isMissingNode() && !value.isNull()) document.set(field, value);
         }
-        if (!row.path("attachmentsHead").isMissingNode()) {
-            JsonNode head = row.path("attachmentsHead");
-            document.put("attachmentsHead", head.isObject() ? text(head, "id") : text(head));
-        }
-        if (!row.path("historyInitialized").isMissingNode()) document.set("historyInitialized", row.path("historyInitialized"));
         return document;
-    }
-
-    private static String scalar(JsonNode row, String field) {
-        JsonNode value = row.path(field);
-        return value.isValueNode() && !value.isNull() ? value.asString() : "";
     }
 }
