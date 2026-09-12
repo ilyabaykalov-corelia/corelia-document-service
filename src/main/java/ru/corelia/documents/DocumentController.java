@@ -15,13 +15,16 @@ import tools.jackson.databind.JsonNode;
 @RequestMapping("/internal/v1")
 public class DocumentController {
     private final ru.corelia.integration.DataSpaceClient data;
+    private final DocumentVersionService versions;
     private final DocumentService documents;
     private final ApiRequest requests;
 
     public DocumentController(
             DocumentService documents,
+            DocumentVersionService versions,
             ApiRequest requests,
             ru.corelia.integration.DataSpaceClient data) {
+        this.versions = versions;
         this.data = data;
         this.documents = documents;
         this.requests = requests;
@@ -65,5 +68,18 @@ public class DocumentController {
     public JsonNode update(
             @PathVariable String type, @PathVariable String id, HttpServletRequest request) {
         return documents.update(type, id, requests.body(request), requests.auth(request));
+    }
+
+    @GetMapping("/documents/{type}/{id}/versions")
+    public JsonNode versions(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
+        return versions.versions(type, id, requests.auth(r));
+    }
+    @GetMapping("/documents/{type}/{id}/versions/{version}")
+    public JsonNode version(@PathVariable String type, @PathVariable String id, @PathVariable int version, HttpServletRequest r) {
+        return versions.get(type, id, version, requests.auth(r));
+    }
+    @PostMapping("/documents/{type}/{id}/attachment-commands")
+    public JsonNode attachmentCommand(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
+        return versions.attachment(type, id, requests.body(r), requests.auth(r));
     }
 }

@@ -18,17 +18,19 @@ import java.util.*;
 /** Универсальные карточки; создание делегируется процессу, бизнес-решения принимает платформа. */
 @Service
 public class DocumentService {
+    private final DocumentVersionService versions;
     private final DocumentRepository repository;
     private final ServiceClient services;
 
-    public DocumentService(DocumentRepository repository, ServiceClient services) {
+    public DocumentService(DocumentRepository repository, ServiceClient services, DocumentVersionService versions) {
+        this.versions = versions;
         this.repository = repository;
         this.services = services;
     }
 
     public JsonNode get(String type, String id, AuthContext auth) {
         PdsContract.requireType(type);
-        return repository.get(type, id, auth);
+        return versions.get(type, id, null, auth);
     }
 
     public JsonNode search(String type, JsonNode payload, AuthContext auth) {
@@ -86,10 +88,7 @@ public class DocumentService {
     }
 
     public JsonNode update(String type, String id, JsonNode body, AuthContext auth) {
-        PdsContract.requireType(type);
-        JsonNode attributes = PdsContract.validateAttributes(body.path("attributes"), true);
-        repository.update(type, id, attributes, auth);
-        return get(type, id, auth);
+        return versions.update(type, id, body, auth);
     }
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
@@ -114,35 +113,6 @@ public class DocumentService {
         JsonNode variables = instance.path("globalVariables");
         String returned = text(unwrap(variables.path("documentId")));
         if (!returned.isEmpty()) id = returned;
-        if (!text(unwrap(variables.path("id"))).isEmpty()) {
-            ObjectNode resultAttributes = copy(attributes);
-            for (String field : PdsContract.FIELDS) {
-                JsonNode value = unwrap(variables.path(field));
-                if (!value.isMissingNode() && !value.isNull()) resultAttributes.set(field, value);
-            }
-            String status = PdsContract.INITIAL_STATUS;
-            ObjectNode result =
-                    object(
-                            "id",
-                            id,
-                            "typeCode",
-                            type,
-                            "typeName",
-                            PdsContract.NAME,
-                            "attributes",
-                            resultAttributes,
-                            "status",
-                            status,
-                            "statusLabel",
-                            PdsContract.label(status),
-                            "processInstanceId",
-                            instanceId);
-            for (String field : List.of("createdBy", "createdAt")) {
-                JsonNode value = unwrap(variables.path(field));
-                if (!value.isMissingNode() && !value.isNull()) result.set(field, value);
-            }
-            return result;
-        }
         for (int attempt = 0; attempt < 30; attempt++) {
             try {
                 ObjectNode result = copy(get(type, id, auth));
