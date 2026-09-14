@@ -6,11 +6,11 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 
-/** Порт чтения и изменения карточек. Владельцем данных остаётся выбранная платформа. */
+/** Порт чтения и изменения карточек. Бизнес-правила принадлежат ядру. */
 public interface DocumentRepository {
     List<JsonNode> all(String type, AuthContext auth);
 
     JsonNode get(String type, String id, AuthContext auth);
 
-    void update(String type, String id, JsonNode attributes, AuthContext auth);
+
 }

@@ -61,15 +61,6 @@ public class PlatformDocumentRepository implements DocumentRepository {
         return map(type, find(type, id, auth));
     }
 
-    public void update(String code, String id, JsonNode attributes, AuthContext auth) {
-        JsonNode row = find(code, id, auth);
-        ObjectNode input = object("id", text(row, "id"));
-        PdsContract.validateAttributes(attributes, true)
-                .properties()
-                .forEach(e -> input.set(e.getKey(), e.getValue()));
-        data.query("updatePdsContract", object("input", input), auth);
-    }
-
     private JsonNode map(String code, JsonNode row) {
         String id = text(row, "documentId");
         if (id.isEmpty())
