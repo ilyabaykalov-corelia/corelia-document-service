@@ -32,10 +32,10 @@ public class PlatformDocumentRepository implements DocumentRepository {
         long maximum = config.number("CORELIA_DOCUMENT_SCAN_LIMIT", 10000);
         for (int offset = 0; ; ) {
             JsonNode page =
-                    data.query("searchPdsContract", object("offset", offset, "limit", 500), auth)
-                            .path("searchPdsContract");
+                    data.query("searchDocument", object("offset", offset, "limit", 500), auth)
+                            .path("searchDocument");
             List<JsonNode> rows = list(page.path("elems"));
-            result.addAll(rows);
+            result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::pds).toList());
             offset += rows.size();
             if (rows.isEmpty() || offset >= number(page, "count", offset)) return result;
             if (offset >= maximum)
@@ -67,10 +67,10 @@ public class PlatformDocumentRepository implements DocumentRepository {
             throw new ApiException(502, "DataSpace вернул документ без публичного идентификатора");
         ObjectNode attributes = object();
         for (String field : PdsContract.FIELDS) {
-            JsonNode value = row.path(field);
+            JsonNode value = row.path("attributes").path(field);
             if (!value.isMissingNode()) attributes.set(field, value);
         }
-        String status = PdsContract.normalizeStatus(text(row, "approvalStatus"));
+        String status = PdsContract.normalizeStatus(text(row, "status"));
         ObjectNode document =
                 object(
                         "id",

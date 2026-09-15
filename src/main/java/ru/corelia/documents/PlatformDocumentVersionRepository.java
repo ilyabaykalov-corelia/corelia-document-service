@@ -29,14 +29,20 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
             if (batch.isEmpty()) throw new ApiException(502, "Неполная выборка DataSpace");
         }
     }
+    public String type(String id, AuthContext auth) {
+        return search("searchDocument", condition("documentId", id), auth).stream()
+            .filter(x -> id.equals(text(x, "documentId")))
+            .map(x -> text(x.path("documentType"), "id")).findFirst()
+            .orElseThrow(() -> new ApiException(404, "Документ не найден"));
+    }
     public JsonNode document(String type, String id, AuthContext auth) {
         PdsContract.requireType(type);
-        return search("searchPdsContract", condition("documentId", id), auth).stream()
-            .filter(x -> id.equals(text(x, "documentId"))).findFirst()
+        return search("searchDocument", condition("documentId", id), auth).stream()
+            .filter(x -> id.equals(text(x, "documentId")) && type.equals(text(x.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::pds).findFirst()
             .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }
     public List<JsonNode> versions(String id, AuthContext auth) {
-        return search("searchPdsContractVersion", condition("documentId", id), auth).stream()
+        return search("searchDocumentVersion", condition("documentId", id), auth).stream()
             .filter(x -> id.equals(text(x, "documentId"))).toList();
     }
     public List<JsonNode> attachments(String id, AuthContext auth) {
@@ -51,12 +57,11 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
     public void commit(JsonNode doc, JsonNode attributes, int version, JsonNode createdVersion,
                        JsonNode changedVersion, JsonNode createdFile, JsonNode retiredFile,
                        String key, String hash, JsonNode response, AuthContext auth) {
-        var update = copy(attributes);
+        var update = object();
         update.put("id", text(doc, "id")); update.put("version", version);
         update.put("changeToken", response.hasNonNull("changeToken") ? text(response, "changeToken") : UUID.randomUUID().toString());
         var compare = object("changeToken", doc.hasNonNull("changeToken") ? doc.path("changeToken") : null);
-        // Also guard legacy attribute writers, while BPMN may continue updating only the status.
-        for (String field : PdsContract.FIELDS) compare.set(field, doc.path(field));
+
         if (createdVersion != null && version == 1 && number(doc, "version", 0) == 0) {
             data.query("initializeDocumentVersion", object("id", text(doc, "id"), "token", text(update, "changeToken"), "compare", compare, "version", createdVersion), auth);
             return;
@@ -70,6 +75,10 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
             if (changedVersion == null || createdFile != null || retiredFile != null)
                 throw new IllegalArgumentException("Invalid attribute version transaction");
             operation = "commitDocumentAttributes";
+            var details = copy(attributes);
+            details.put("id", text(doc, "detailsId"));
+            vars.set("details", details);
+            vars.set("detailsCompare", doc.path("attributes"));
             vars.set("version", createdVersion);
             vars.set("previous", changedVersion);
         } else if (changedVersion != null) {

@@ -4,8 +4,7 @@ import static ru.corelia.support.Json.*;
 import org.springframework.stereotype.Service;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.PdsContract;
-import ru.corelia.transport.ServiceClient;
+
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
@@ -20,9 +19,9 @@ import java.util.*;
 public class DocumentVersionService {
     private final DocumentVersionRepository repository;
     private final DocumentRepository documents;
-    private final ServiceClient services;
-    public DocumentVersionService(DocumentVersionRepository repository, DocumentRepository documents, ServiceClient services) {
-        this.repository = repository; this.documents = documents; this.services = services;
+    private final List<DocumentPolicy> policies;
+    public DocumentVersionService(DocumentVersionRepository repository, DocumentRepository documents, List<DocumentPolicy> policies) {
+        this.repository = repository; this.documents = documents; this.policies = List.copyOf(policies);
     }
     private record State(JsonNode document, JsonNode version, List<JsonNode> versions) {}
     private static String now() { return LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS).toString(); }
@@ -30,10 +29,15 @@ public class DocumentVersionService {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
         catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
+    private DocumentPolicy policy(String type) {
+        return policies.stream().filter(p -> p.type().equals(type)).findFirst()
+            .orElseThrow(() -> new ApiException(400, "Неизвестный вид документа"));
+    }
     private static ObjectNode attributes(JsonNode value) {
-        var result = object();
-        for (String field : PdsContract.FIELDS) result.set(field, value.path(field));
-        return result;
+        JsonNode attrs = value.path("attributes");
+        if (attrs.isString()) attrs = parse(attrs.asString());
+        if (!attrs.isObject()) throw new ApiException(502, "Некорректный снимок атрибутов документа");
+        return copy(attrs);
     }
     private State state(String type, String id, AuthContext auth) {
         for (int attempt = 0; attempt < 4; attempt++) {
@@ -41,7 +45,7 @@ public class DocumentVersionService {
             int number = (int) number(doc, "version", 0);
             if (number == 0) {
                 var files = repository.attachments(id, auth).stream().filter(DocumentVersionService::current).toList();
-                var first = snapshot(doc, 1, attributes(doc), files, auth);
+                var first = snapshot(doc, 1, policy(type).schemaVersion(), attributes(doc), files, auth);
                 String key = digest("initialize:" + id);
                 try { repository.commit(doc, object(), 1, first, null, null, null, key, key, object("version", 1), auth); }
                 catch (ApiException e) {
@@ -59,8 +63,8 @@ public class DocumentVersionService {
         }
         throw new ApiException(409, "Документ изменяется. Повторите чтение.");
     }
-    private static ObjectNode snapshot(JsonNode doc, int version, JsonNode attrs, List<JsonNode> files, AuthContext auth) {
-        var result = copy(attrs);
+    private static ObjectNode snapshot(JsonNode doc, int version, int schemaVersion, JsonNode attrs, List<JsonNode> files, AuthContext auth) {
+        var result = object("attributes", write(attrs), "schemaVersion", schemaVersion);
         result.put("document", text(doc, "id")); result.put("documentId", text(doc, "documentId"));
         result.put("version", version); result.put("attachments", write(files));
         result.put("createdBy", auth.login()); result.put("createdAt", now());
@@ -80,6 +84,7 @@ public class DocumentVersionService {
     }
     private JsonNode view(String type, String id, State state, JsonNode selected, AuthContext auth) {
         var result = copy(documents.get(type, id, auth));
+        policy(type).checkSchema((int) number(selected, "schemaVersion", 0));
         result.set("attributes", attributes(selected));
         result.put("version", number(selected, "version", 1));
         result.put("currentVersion", number(state.document, "version", 1));
@@ -88,6 +93,9 @@ public class DocumentVersionService {
         result.put("versionCreatedAt", text(selected, "createdAt"));
         result.set("attachments", array(files(selected).stream().map(DocumentVersionService::publicFile).toList()));
         return result;
+    }
+    public JsonNode getById(String id, AuthContext auth) {
+        return get(repository.type(id, auth), id, null, auth);
     }
     public JsonNode get(String type, String id, Integer number, AuthContext auth) {
         State state = state(type, id, auth);
@@ -104,17 +112,6 @@ public class DocumentVersionService {
                 "createdAt", text(v, "createdAt"), "closedAt", text(v, "closedAt"),
                 "current", number(v, "version", 0) == number(state.document, "version", 0))).toList());
     }
-    private void authorize(JsonNode doc, String action, AuthContext auth) {
-        if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
-            throw new ApiException(403, "Изменение документа доступно оператору");
-        String status = text(doc, "approvalStatus");
-        if (action.equals("upload") && status.equals("CREATED") && auth.login().equals(text(doc, "createdBy"))) return;
-        if (!status.equals("IN_WORK")) throw new ApiException(409, "Документ недоступен для изменения на текущем шаге");
-        JsonNode workflow = services.call("workflow", "/internal/v1/documents/PDS_CONTRACT/" + encode(text(doc, "documentId")) + "/workflow", "GET", null, auth);
-        if (!auth.login().equals(text(workflow.path("executor"), "login"))
-                || !"document_operator".equals(text(workflow.path("executor"), "role")))
-            throw new ApiException(403, "Документ может изменять назначенный оператор");
-    }
     private static String requestKey(String id, JsonNode body, AuthContext auth) {
         String requestId = text(body, "requestId");
         try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Требуется requestId в формате UUID"); }
@@ -127,19 +124,20 @@ public class DocumentVersionService {
         return parse(text(receipt, "response"));
     }
     public JsonNode update(String type, String id, JsonNode body, AuthContext auth) {
-        JsonNode patch = PdsContract.validateAttributes(body.path("attributes"), true);
+        JsonNode patch = policy(type).validate(body.path("attributes"));
         String key = requestKey(id, body, auth), hash = digest(write(object("action", "attributes", "body", body)));
         repository.document(type, id, auth); // Access must still be checked on replay.
         JsonNode prior = replay(key, hash, auth); if (prior != null) return prior;
         State state = state(type, id, auth);
-        authorize(state.document, "attributes", auth);
+        policy(type).authorize(state.document, "attributes", auth);
+        policy(type).checkSchema((int) number(state.version, "schemaVersion", 0));
         if (number(body, "expectedVersion", -1) != number(state.document, "version", 0)
                 || !text(body, "changeToken").equals(text(state.document, "changeToken")))
             throw new ApiException(409, "Документ или вложения изменены. Обновите карточку перед сохранением.");
         var attrs = attributes(state.version); patch.properties().forEach(e -> attrs.set(e.getKey(), e.getValue()));
         boolean changed = !attrs.equals(attributes(state.version));
         int version = (int) number(state.document, "version", 1) + (changed ? 1 : 0);
-        JsonNode created = changed ? snapshot(state.document, version, attrs, files(state.version), auth) : null;
+        JsonNode created = changed ? snapshot(state.document, version, policy(type).schemaVersion(), attrs, files(state.version), auth) : null;
         JsonNode closed = changed ? object("id", text(state.version, "id"), "closedAt", now()) : null;
         var response = copy(view(type, id, state, created == null ? state.version : created, auth));
         response.put("currentVersion", version);
@@ -162,7 +160,8 @@ public class DocumentVersionService {
         String key = requestKey(id, body, auth), hash = digest(write(canonical));
         repository.document(type, id, auth);
         JsonNode prior = replay(key, hash, auth); if (prior != null) return prior;
-        State state = state(type, id, auth); authorize(state.document, action, auth);
+        State state = state(type, id, auth); policy(type).authorize(state.document, action, auth);
+        policy(type).checkSchema((int) number(state.version, "schemaVersion", 0));
         List<JsonNode> manifest = new ArrayList<>(files(state.version));
         JsonNode old = null;
         if (!action.equals("upload")) {

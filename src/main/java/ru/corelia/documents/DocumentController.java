@@ -52,6 +52,11 @@ public class DocumentController {
         return documents.search(type, requests.body(request), requests.auth(request));
     }
 
+    @GetMapping("/documents/by-id/{id}")
+    public JsonNode getById(@PathVariable String id, HttpServletRequest request) {
+        return versions.getById(id, requests.auth(request));
+    }
+
     @GetMapping("/documents/{type}/{id}")
     public JsonNode get(
             @PathVariable String type, @PathVariable String id, HttpServletRequest request) {
