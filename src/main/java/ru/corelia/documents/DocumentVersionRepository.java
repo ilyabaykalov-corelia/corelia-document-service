@@ -6,6 +6,7 @@ import java.util.List;
 
 /** Atomic persistence port. Tokens and handles are opaque to the domain service. */
 public interface DocumentVersionRepository {
+    String type(String id, AuthContext auth);
     JsonNode document(String type, String id, AuthContext auth);
     List<JsonNode> versions(String id, AuthContext auth);
     List<JsonNode> attachments(String id, AuthContext auth);

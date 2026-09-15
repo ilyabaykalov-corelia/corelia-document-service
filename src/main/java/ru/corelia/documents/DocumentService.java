@@ -15,7 +15,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.*;
 
-/** Универсальные карточки; создание делегируется процессу, бизнес-решения принимает платформа. */
+/** API карточек ПДС; история управляется ядром, создание пока делегируется существующему процессу. */
 @Service
 public class DocumentService {
     private final DocumentVersionService versions;
