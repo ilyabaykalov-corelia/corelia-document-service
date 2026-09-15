@@ -6,7 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import ru.corelia.http.ApiRequest;
-import ru.corelia.integration.PdsContract;
+import ru.corelia.integration.DocumentTypes;
 
 import tools.jackson.databind.JsonNode;
 
@@ -44,7 +44,12 @@ public class DocumentController {
 
     @GetMapping("/document-types")
     public JsonNode types() {
-        return PdsContract.catalog();
+        return DocumentTypes.catalog();
+    }
+
+    @PostMapping("/documents/search")
+    public JsonNode searchAll(HttpServletRequest request) {
+        return documents.searchAll(requests.body(request), requests.auth(request));
     }
 
     @PostMapping("/documents/{type}/search")
