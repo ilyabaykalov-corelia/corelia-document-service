@@ -4,7 +4,7 @@ import static ru.corelia.support.Json.*;
 import org.springframework.stereotype.Component;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.integration.DataSpaceClient;
-import ru.corelia.integration.PdsContract;
+import ru.corelia.integration.DocumentTypes;
 import ru.corelia.http.ApiException;
 import tools.jackson.databind.JsonNode;
 import java.util.*;
@@ -36,9 +36,9 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
             .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }
     public JsonNode document(String type, String id, AuthContext auth) {
-        PdsContract.requireType(type);
+        DocumentTypes.requireType(type);
         return search("searchDocument", condition("documentId", id), auth).stream()
-            .filter(x -> id.equals(text(x, "documentId")) && type.equals(text(x.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::pds).findFirst()
+            .filter(x -> id.equals(text(x, "documentId")) && type.equals(text(x.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::document).findFirst()
             .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }
     public List<JsonNode> versions(String id, AuthContext auth) {
@@ -74,7 +74,7 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
         if (createdVersion != null) {
             if (changedVersion == null || createdFile != null || retiredFile != null)
                 throw new IllegalArgumentException("Invalid attribute version transaction");
-            operation = "commitDocumentAttributes";
+            operation = text(doc.path("documentType"), "id").equals("KID_OPS") ? "commitKidOpsAttributes" : "commitDocumentAttributes";
             var details = copy(attributes);
             details.put("id", text(doc, "detailsId"));
             vars.set("details", details);

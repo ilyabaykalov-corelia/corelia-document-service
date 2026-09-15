@@ -8,14 +8,14 @@ import ru.corelia.auth.AuthContext;
 import ru.corelia.config.CoreliaConfig;
 import ru.corelia.http.ApiException;
 import ru.corelia.integration.DataSpaceClient;
-import ru.corelia.integration.PdsContract;
+import ru.corelia.integration.DocumentTypes;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.*;
 
-/** Адаптер модели ПДС: использует зарегистрированные в Platform V операции GraphQL. */
+/** Адаптер моделей документов: использует зарегистрированные в Platform V операции GraphQL. */
 @Component
 public class PlatformDocumentRepository implements DocumentRepository {
     private final DataSpaceClient data;
@@ -27,7 +27,7 @@ public class PlatformDocumentRepository implements DocumentRepository {
     }
 
     private List<JsonNode> raw(String code, AuthContext auth) {
-        PdsContract.requireType(code);
+        DocumentTypes.requireType(code);
         List<JsonNode> result = new ArrayList<>();
         long maximum = config.number("CORELIA_DOCUMENT_SCAN_LIMIT", 10000);
         for (int offset = 0; ; ) {
@@ -35,7 +35,7 @@ public class PlatformDocumentRepository implements DocumentRepository {
                     data.query("searchDocument", object("offset", offset, "limit", 500), auth)
                             .path("searchDocument");
             List<JsonNode> rows = list(page.path("elems"));
-            result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::pds).toList());
+            result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::document).toList());
             offset += rows.size();
             if (rows.isEmpty() || offset >= number(page, "count", offset)) return result;
             if (offset >= maximum)
@@ -66,11 +66,11 @@ public class PlatformDocumentRepository implements DocumentRepository {
         if (id.isEmpty())
             throw new ApiException(502, "DataSpace вернул документ без публичного идентификатора");
         ObjectNode attributes = object();
-        for (String field : PdsContract.FIELDS) {
+        for (String field : DocumentTypes.fields(code)) {
             JsonNode value = row.path("attributes").path(field);
             if (!value.isMissingNode()) attributes.set(field, value);
         }
-        String status = PdsContract.normalizeStatus(text(row, "status"));
+        String status = text(row, "status");
         ObjectNode document =
                 object(
                         "id",
@@ -78,13 +78,13 @@ public class PlatformDocumentRepository implements DocumentRepository {
                         "typeCode",
                         code,
                         "typeName",
-                        PdsContract.NAME,
+                        DocumentTypes.name(code),
                         "attributes",
                         attributes,
                         "status",
                         status,
                         "statusLabel",
-                        PdsContract.label(status));
+                        DocumentTypes.label(code, status));
         for (String field : List.of("createdBy", "createdAt")) {
             JsonNode value = row.path(field);
             if (!value.isMissingNode() && !value.isNull()) document.set(field, value);

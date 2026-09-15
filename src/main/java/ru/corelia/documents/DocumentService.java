@@ -6,7 +6,7 @@ import org.springframework.stereotype.Service;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.PdsContract;
+import ru.corelia.integration.DocumentTypes;
 import ru.corelia.support.LogJson;
 import ru.corelia.transport.ServiceClient;
 
@@ -15,28 +15,41 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.*;
 
-/** API карточек ПДС; история управляется ядром, создание пока делегируется существующему процессу. */
+/** API карточек документов; история управляется ядром, создание пока делегируется существующему процессу. */
 @Service
 public class DocumentService {
     private final DocumentVersionService versions;
     private final DocumentRepository repository;
+    private final DocumentVersionRepository versionRepository;
     private final ServiceClient services;
 
-    public DocumentService(DocumentRepository repository, ServiceClient services, DocumentVersionService versions) {
+    public DocumentService(DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+        this.versionRepository = versionRepository;
         this.versions = versions;
         this.repository = repository;
         this.services = services;
     }
 
     public JsonNode get(String type, String id, AuthContext auth) {
-        PdsContract.requireType(type);
+        DocumentTypes.requireType(type);
         return versions.get(type, id, null, auth);
     }
 
+    public JsonNode searchAll(JsonNode body, AuthContext auth) {
+        var filters = copy(body).put("offset", 0).put("limit", 10000);
+        var all = new ArrayList<JsonNode>();
+        for (String type : DocumentTypes.TYPES) all.addAll(list(search(type, filters, auth).path("items")));
+        all.sort(Comparator.comparing((JsonNode d) -> text(d.path("attributes"), "contractDate")).reversed().thenComparing(d -> text(d, "id")));
+        int offset = (int)Math.min(all.size(), Math.max(0, number(body, "offset", 0)));
+        int limit = (int)Math.min(10000, Math.max(1, number(body, "limit", 1000)));
+        return object("items", all.subList(offset, Math.min(all.size(), offset + limit)), "total", all.size());
+    }
+
     public JsonNode search(String type, JsonNode payload, AuthContext auth) {
-        PdsContract.requireType(type);
+        DocumentTypes.requireType(type);
         String query = text(payload, "query").toLowerCase(Locale.ROOT),
-                status = PdsContract.status(text(payload, "status"));
+                status = DocumentTypes.status(type, text(payload, "status"));
+        if (!text(payload, "status").isEmpty() && status == null) return object("items", List.of(), "total", 0);
         String from = date(text(payload, "dateFrom")),
                 to = date(text(payload, "dateTo")),
                 dateField = "contractDate";
@@ -59,7 +72,7 @@ public class DocumentService {
                                                             + text(doc, "statusLabel"))
                                                     .toLowerCase(Locale.ROOT)
                                                     .contains(query)) return true;
-                                    return PdsContract.FIELDS.stream()
+                                    return DocumentTypes.fields(type).stream()
                                             .anyMatch(
                                                     field ->
                                                             text(doc.path("attributes"), field)
@@ -92,15 +105,36 @@ public class DocumentService {
     }
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
-        PdsContract.requireType(type);
-        JsonNode attributes = PdsContract.validateAttributes(body.path("attributes"), false);
+        DocumentTypes.requireType(type);
+        JsonNode attributes = DocumentTypes.validate(type, body.path("attributes"), false);
         String id = UUID.randomUUID().toString();
+        var start = object("typeCode", type, "attributes", attributes);
+        if (type.equals("KID_OPS")) {
+            if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
+                throw new ApiException(403, "Создание доступно оператору");
+            String requestId = text(body, "requestId");
+            try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
+            JsonNode file = body.path("initialAttachment");
+            if (!file.isObject() || text(file, "contentBase64").isEmpty())
+                throw new ApiException(400, "Для создания КИД ОПС требуется вложение");
+            id = UUID.nameUUIDFromBytes((auth.login() + ":KID_OPS:" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+            String key = hash("create:" + id), requestHash = hash(write(object("attributes", attributes, "file", file)));
+            JsonNode receipt = versionRepository.receipt(key, auth);
+            if (receipt != null) {
+                if (!requestHash.equals(text(receipt, "requestHash"))) throw new ApiException(409, "requestId уже использован для других данных");
+                return get(type, id, auth);
+            }
+            JsonNode staged = services.call("attachment", "/internal/v1/initial-attachments/" + encode(id), "POST", object("attachment", file), auth);
+            start.set("initialAttachment", staged);
+            start.put("creationKey", key); start.put("creationHash", requestHash);
+        }
+        start.put("documentId", id);
         JsonNode instance =
                 services.call(
                         "workflow",
                         "/internal/v1/processes/start",
                         "POST",
-                        object("typeCode", type, "documentId", id, "attributes", attributes),
+                        start,
                         auth);
         String instanceId = text(instance, "id");
         LogJson.info(
@@ -157,6 +191,10 @@ public class DocumentService {
                         + instanceId);
     }
 
+    private static String hash(String value) {
+        try { return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
+    }
     private static String date(String value) {
         if (value.matches("^\\d{2}\\.\\d{2}\\.\\d{4}.*"))
             return value.substring(6, 10)
