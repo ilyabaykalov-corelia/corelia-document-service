@@ -12,8 +12,9 @@ public final class ConfiguredDocumentPolicy implements DocumentPolicy {
     private final ServiceClient services;
     private final DocumentTypes types;
     private final String type;
-    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypes types, String type) {
-        this.services = services; this.types = types; this.type = type;
+    private final ru.corelia.auth.PermissionChecker permissions;
+    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypes types, String type, ru.corelia.auth.PermissionChecker permissions) {
+        this.permissions = permissions; this.services = services; this.types = types; this.type = type;
     }
     public String type() { return type; }
     public int schemaVersion() { return types.definition(type).schemaVersion(); }
@@ -25,14 +26,14 @@ public final class ConfiguredDocumentPolicy implements DocumentPolicy {
             throw new ApiException(400, "Превышен допустимый состав вложений документа");
     }
     public void authorize(JsonNode doc, String action, AuthContext auth) {
-        if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
-            throw new ApiException(403, "Изменение документа доступно оператору");
+        JsonNode rules = types.definition(type).authorization();
+        permissions.require(text(rules, "editPermission"), auth);
         String status = text(doc, "status");
-        if (action.equals("upload") && status.equals("CREATED") && auth.login().equals(text(doc, "createdBy"))) return;
-        if (!status.equals("IN_WORK")) throw new ApiException(409, "Документ недоступен для изменения на текущем шаге");
+        if (action.equals("upload") && list(rules.path("initialUploadStatuses")).stream().anyMatch(v -> text(v).equals(status)) && auth.login().equals(text(doc, "createdBy"))) return;
+        if (list(rules.path("editableStatuses")).stream().noneMatch(v -> text(v).equals(status))) throw new ApiException(409, "Документ недоступен для изменения на текущем шаге");
         JsonNode workflow = services.call("workflow", "/internal/v1/documents/" + type() + "/" + encode(text(doc, "documentId")) + "/workflow", "GET", null, auth);
         if (!auth.login().equals(text(workflow.path("executor"), "login"))
-                || !"document_operator".equals(text(workflow.path("executor"), "role")))
-            throw new ApiException(403, "Документ может изменять назначенный оператор");
+                || !text(rules, "executorRole").equals(text(workflow.path("executor"), "role")))
+            throw new ApiException(403, "Документ может изменять назначенный исполнитель");
     }
 }

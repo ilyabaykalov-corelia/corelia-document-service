@@ -19,12 +19,14 @@ import java.util.*;
 @Service
 public class DocumentService {
     private final DocumentTypes types;
+    private final ru.corelia.auth.PermissionChecker permissions;
     private final DocumentVersionService versions;
     private final DocumentRepository repository;
     private final DocumentVersionRepository versionRepository;
     private final ServiceClient services;
 
-    public DocumentService(DocumentTypes types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypes types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+        this.permissions = permissions;
         this.types = types;
         this.versionRepository = versionRepository;
         this.versions = versions;
@@ -111,12 +113,11 @@ public class DocumentService {
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
         types.requireType(type);
+        permissions.require(text(types.definition(type).authorization(), "createPermission"), auth);
         JsonNode attributes = types.validate(type, body.path("attributes"), false);
         String id = UUID.randomUUID().toString();
         var start = object("typeCode", type, "attributes", attributes);
         if (types.initialAttachmentRequired(type)) {
-            if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
-                throw new ApiException(403, "Создание доступно оператору");
             String requestId = text(body, "requestId");
             try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
             JsonNode file = body.path("initialAttachment");

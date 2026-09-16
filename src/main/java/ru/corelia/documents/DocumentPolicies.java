@@ -9,7 +9,7 @@ import java.util.List;
 @Configuration
 public class DocumentPolicies {
     @Bean
-    public List<DocumentPolicy> configuredDocumentPolicies(DocumentTypes types, ServiceClient services) {
-        return types.types().stream().map(type -> (DocumentPolicy) new ConfiguredDocumentPolicy(services, types, type)).toList();
+    public List<DocumentPolicy> configuredDocumentPolicies(DocumentTypes types, ServiceClient services, ru.corelia.auth.PermissionChecker permissions) {
+        return types.types().stream().map(type -> (DocumentPolicy) new ConfiguredDocumentPolicy(services, types, type, permissions)).toList();
     }
 }
