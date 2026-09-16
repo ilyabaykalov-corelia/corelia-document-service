@@ -1,20 +1,29 @@
 package ru.corelia.documents;
 
 import static ru.corelia.support.Json.*;
-import org.springframework.stereotype.Component;
+
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.PdsContract;
+import ru.corelia.integration.DocumentTypes;
 import ru.corelia.transport.ServiceClient;
 import tools.jackson.databind.JsonNode;
 
-@Component
-public final class PdsDocumentPolicy implements DocumentPolicy {
+public final class ConfiguredDocumentPolicy implements DocumentPolicy {
     private final ServiceClient services;
-    public PdsDocumentPolicy(ServiceClient services) { this.services = services; }
-    public String type() { return PdsContract.TYPE; }
-    public int schemaVersion() { return 1; }
-    public JsonNode validate(JsonNode attributes) { return PdsContract.validateAttributes(attributes, true); }
+    private final DocumentTypes types;
+    private final String type;
+    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypes types, String type) {
+        this.services = services; this.types = types; this.type = type;
+    }
+    public String type() { return type; }
+    public int schemaVersion() { return types.definition(type).schemaVersion(); }
+    public JsonNode validate(JsonNode attributes) { return types.validate(type, attributes, true); }
+    public void validateSnapshot(JsonNode attributes) { types.validate(type, attributes, false); }
+    public void validateAttachmentCount(int count) {
+        JsonNode policy = types.definition(type).attachments();
+        if (!policy.path("enabled").asBoolean() || count > policy.path("maxCount").asInt())
+            throw new ApiException(400, "Превышен допустимый состав вложений документа");
+    }
     public void authorize(JsonNode doc, String action, AuthContext auth) {
         if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
             throw new ApiException(403, "Изменение документа доступно оператору");

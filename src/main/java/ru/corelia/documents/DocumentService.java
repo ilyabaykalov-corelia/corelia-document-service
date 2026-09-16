@@ -18,12 +18,14 @@ import java.util.*;
 /** API карточек документов; история управляется ядром, создание пока делегируется существующему процессу. */
 @Service
 public class DocumentService {
+    private final DocumentTypes types;
     private final DocumentVersionService versions;
     private final DocumentRepository repository;
     private final DocumentVersionRepository versionRepository;
     private final ServiceClient services;
 
-    public DocumentService(DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(DocumentTypes types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+        this.types = types;
         this.versionRepository = versionRepository;
         this.versions = versions;
         this.repository = repository;
@@ -31,29 +33,34 @@ public class DocumentService {
     }
 
     public JsonNode get(String type, String id, AuthContext auth) {
-        DocumentTypes.requireType(type);
-        return versions.get(type, id, null, auth);
+        types.requireType(type);
+        var result = copy(versions.get(type, id, null, auth));
+        result.put("workflowCompleted", list(types.definition(type).workflow().path("terminalStatuses")).stream()
+            .anyMatch(status -> text(status).equals(text(result, "status"))));
+        return result;
     }
 
     public JsonNode searchAll(JsonNode body, AuthContext auth) {
         var filters = copy(body).put("offset", 0).put("limit", 10000);
         var all = new ArrayList<JsonNode>();
-        for (String type : DocumentTypes.TYPES) all.addAll(list(search(type, filters, auth).path("items")));
-        all.sort(Comparator.comparing((JsonNode d) -> text(d.path("attributes"), "contractDate")).reversed().thenComparing(d -> text(d, "id")));
+        for (String type : types.types()) all.addAll(list(search(type, filters, auth).path("items")));
+        all.sort(Comparator.comparing((JsonNode d) -> text(d, "createdAt")).reversed().thenComparing(d -> text(d, "id")));
         int offset = (int)Math.min(all.size(), Math.max(0, number(body, "offset", 0)));
         int limit = (int)Math.min(10000, Math.max(1, number(body, "limit", 1000)));
         return object("items", all.subList(offset, Math.min(all.size(), offset + limit)), "total", all.size());
     }
 
     public JsonNode search(String type, JsonNode payload, AuthContext auth) {
-        DocumentTypes.requireType(type);
+        types.requireType(type);
         String query = text(payload, "query").toLowerCase(Locale.ROOT),
-                status = DocumentTypes.status(type, text(payload, "status"));
+                status = types.status(type, text(payload, "status"));
         if (!text(payload, "status").isEmpty() && status == null) return object("items", List.of(), "total", 0);
         String from = date(text(payload, "dateFrom")),
                 to = date(text(payload, "dateTo")),
-                dateField = "contractDate";
-        List<String> sorting = List.of("contractDate", "contractNumber");
+                dateField = text(types.definition(type).ui(), "dateField");
+        if (dateField.isEmpty() && (!from.isEmpty() || !to.isEmpty()))
+            throw new ApiException(400, "Для этого вида не настроен поиск по дате");
+        List<String> sorting = list(types.definition(type).ui().path("sortFields")).stream().map(v -> v.asString()).toList();
         List<JsonNode> result =
                 repository.all(type, auth).stream()
                         .filter(
@@ -72,10 +79,10 @@ public class DocumentService {
                                                             + text(doc, "statusLabel"))
                                                     .toLowerCase(Locale.ROOT)
                                                     .contains(query)) return true;
-                                    return DocumentTypes.fields(type).stream()
+                                    return list(types.definition(type).ui().path("searchFields")).stream().map(v -> v.asString())
                                             .anyMatch(
                                                     field ->
-                                                            text(doc.path("attributes"), field)
+                                                            searchValue(doc.path("attributes").path(field))
                                                                     .toLowerCase(Locale.ROOT)
                                                                     .contains(query));
                                 })
@@ -83,9 +90,7 @@ public class DocumentService {
                                 (a, b) -> {
                                     for (String field : sorting) {
                                         int compared =
-                                                text(b.path("attributes"), field)
-                                                        .compareTo(
-                                                                text(a.path("attributes"), field));
+                                                compareAttribute(b.path("attributes").path(field), a.path("attributes").path(field));
                                         if (compared != 0) return compared;
                                     }
                                     return text(a, "id").compareTo(text(b, "id"));
@@ -105,19 +110,19 @@ public class DocumentService {
     }
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
-        DocumentTypes.requireType(type);
-        JsonNode attributes = DocumentTypes.validate(type, body.path("attributes"), false);
+        types.requireType(type);
+        JsonNode attributes = types.validate(type, body.path("attributes"), false);
         String id = UUID.randomUUID().toString();
         var start = object("typeCode", type, "attributes", attributes);
-        if (type.equals("KID_OPS")) {
+        if (types.initialAttachmentRequired(type)) {
             if (!auth.roles().contains("document_operator") && !auth.roles().contains("app_owner"))
                 throw new ApiException(403, "Создание доступно оператору");
             String requestId = text(body, "requestId");
             try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
             JsonNode file = body.path("initialAttachment");
             if (!file.isObject() || text(file, "contentBase64").isEmpty())
-                throw new ApiException(400, "Для создания КИД ОПС требуется вложение");
-            id = UUID.nameUUIDFromBytes((auth.login() + ":KID_OPS:" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+                throw new ApiException(400, "Для создания документа требуется вложение");
+            id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
             String key = hash("create:" + id), requestHash = hash(write(object("attributes", attributes, "file", file)));
             JsonNode receipt = versionRepository.receipt(key, auth);
             if (receipt != null) {
@@ -189,6 +194,15 @@ public class DocumentService {
                         + id
                         + " не появилась в DataSpace; идентификатор процесса: "
                         + instanceId);
+    }
+
+    private static String searchValue(JsonNode value) {
+        return value.isTextual() || value.isNumber() || value.isBoolean() ? value.asString() : "";
+    }
+    private static int compareAttribute(JsonNode left, JsonNode right) {
+        if (left.isNumber() && right.isNumber())
+            return new java.math.BigDecimal(left.asString()).compareTo(new java.math.BigDecimal(right.asString()));
+        return searchValue(left).compareTo(searchValue(right));
     }
 
     private static String hash(String value) {

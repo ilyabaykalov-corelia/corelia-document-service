@@ -9,6 +9,8 @@ public interface DocumentPolicy {
     String type();
     int schemaVersion();
     JsonNode validate(JsonNode attributes);
+    default void validateSnapshot(JsonNode attributes) {}
+    default void validateAttachmentCount(int count) {}
     void authorize(JsonNode document, String action, AuthContext auth);
     default void checkSchema(int version) {
         if (version != schemaVersion())

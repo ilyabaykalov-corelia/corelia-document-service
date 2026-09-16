@@ -14,16 +14,18 @@ import tools.jackson.databind.JsonNode;
 @RestController
 @RequestMapping("/internal/v1")
 public class DocumentController {
+    private final DocumentTypes types;
     private final ru.corelia.integration.DataSpaceClient data;
     private final DocumentVersionService versions;
     private final DocumentService documents;
     private final ApiRequest requests;
 
-    public DocumentController(
+    public DocumentController(DocumentTypes types,
             DocumentService documents,
             DocumentVersionService versions,
             ApiRequest requests,
             ru.corelia.integration.DataSpaceClient data) {
+        this.types = types;
         this.versions = versions;
         this.data = data;
         this.documents = documents;
@@ -44,8 +46,11 @@ public class DocumentController {
 
     @GetMapping("/document-types")
     public JsonNode types() {
-        return DocumentTypes.catalog();
+        return types.catalog();
     }
+
+    @GetMapping("/document-types/{type}")
+    public JsonNode definition(@PathVariable String type) { return types.publicDefinition(type); }
 
     @PostMapping("/documents/search")
     public JsonNode searchAll(HttpServletRequest request) {
@@ -78,6 +83,11 @@ public class DocumentController {
     public JsonNode update(
             @PathVariable String type, @PathVariable String id, HttpServletRequest request) {
         return documents.update(type, id, requests.body(request), requests.auth(request));
+    }
+
+    @GetMapping("/documents/{type}/{id}/capabilities")
+    public JsonNode capabilities(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
+        return versions.capabilities(type, id, requests.auth(r));
     }
 
     @GetMapping("/documents/{type}/{id}/versions")
