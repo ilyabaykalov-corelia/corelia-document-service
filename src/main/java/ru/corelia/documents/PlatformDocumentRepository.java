@@ -18,24 +18,26 @@ import java.util.*;
 /** Адаптер моделей документов: использует зарегистрированные в Platform V операции GraphQL. */
 @Component
 public class PlatformDocumentRepository implements DocumentRepository {
+    private final DocumentTypes types;
     private final DataSpaceClient data;
     private final CoreliaConfig config;
 
-    public PlatformDocumentRepository(DataSpaceClient data, CoreliaConfig config) {
+    public PlatformDocumentRepository(DocumentTypes types, DataSpaceClient data, CoreliaConfig config) {
+        this.types = types;
         this.data = data;
         this.config = config;
     }
 
     private List<JsonNode> raw(String code, AuthContext auth) {
-        DocumentTypes.requireType(code);
+        types.requireType(code);
         List<JsonNode> result = new ArrayList<>();
         long maximum = config.number("CORELIA_DOCUMENT_SCAN_LIMIT", 10000);
         for (int offset = 0; ; ) {
             JsonNode page =
-                    data.query("searchDocument", object("offset", offset, "limit", 500), auth)
+                    data.query(text(types.definition(code).storage().path("operations"), "search"), object("offset", offset, "limit", 500), auth)
                             .path("searchDocument");
             List<JsonNode> rows = list(page.path("elems"));
-            result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::document).toList());
+            result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(row -> ru.corelia.integration.DocumentProjection.document(row, types)).toList());
             offset += rows.size();
             if (rows.isEmpty() || offset >= number(page, "count", offset)) return result;
             if (offset >= maximum)
@@ -66,7 +68,7 @@ public class PlatformDocumentRepository implements DocumentRepository {
         if (id.isEmpty())
             throw new ApiException(502, "DataSpace вернул документ без публичного идентификатора");
         ObjectNode attributes = object();
-        for (String field : DocumentTypes.fields(code)) {
+        for (String field : types.fields(code)) {
             JsonNode value = row.path("attributes").path(field);
             if (!value.isMissingNode()) attributes.set(field, value);
         }
@@ -78,13 +80,13 @@ public class PlatformDocumentRepository implements DocumentRepository {
                         "typeCode",
                         code,
                         "typeName",
-                        DocumentTypes.name(code),
+                        types.name(code),
                         "attributes",
                         attributes,
                         "status",
                         status,
                         "statusLabel",
-                        DocumentTypes.label(code, status));
+                        types.label(code, status));
         for (String field : List.of("createdBy", "createdAt")) {
             JsonNode value = row.path(field);
             if (!value.isMissingNode() && !value.isNull()) document.set(field, value);

@@ -12,8 +12,10 @@ import java.util.*;
 /** DataSpace-specific formats and transaction boundaries stay in this adapter. */
 @Component
 public class PlatformDocumentVersionRepository implements DocumentVersionRepository {
+    private final DocumentTypes types;
     private final DataSpaceClient data;
-    public PlatformDocumentVersionRepository(DataSpaceClient data) { this.data = data; }
+    public PlatformDocumentVersionRepository(DocumentTypes types, DataSpaceClient data) {
+        this.types = types; this.data = data; }
 
     private static String condition(String field, String value) {
         // String expression literal; never concatenate an unescaped client value.
@@ -35,10 +37,14 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
             .map(x -> text(x.path("documentType"), "id")).findFirst()
             .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }
+    private List<JsonNode> searchDocument(String type, String id, AuthContext auth) {
+        String operation = text(types.definition(type).storage().path("operations"), "search");
+        return list(data.query(operation, object("cond", condition("documentId", id), "offset", 0, "limit", 2), auth).path("searchDocument").path("elems"));
+    }
     public JsonNode document(String type, String id, AuthContext auth) {
-        DocumentTypes.requireType(type);
-        return search("searchDocument", condition("documentId", id), auth).stream()
-            .filter(x -> id.equals(text(x, "documentId")) && type.equals(text(x.path("documentType"), "id"))).map(ru.corelia.integration.DocumentProjection::document).findFirst()
+        types.requireType(type);
+        return searchDocument(type, id, auth).stream()
+            .filter(x -> id.equals(text(x, "documentId")) && type.equals(text(x.path("documentType"), "id"))).map(row -> ru.corelia.integration.DocumentProjection.document(row, types)).findFirst()
             .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }
     public List<JsonNode> versions(String id, AuthContext auth) {
@@ -53,6 +59,12 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
         return list(data.query("searchDocumentCommand", object("cond", condition("commandKey", key)), auth)
             .path("searchDocumentCommand").path("elems")).stream()
             .filter(x -> key.equals(text(x, "commandKey"))).findFirst().orElse(null);
+    }
+    private tools.jackson.databind.node.ObjectNode mappedAttributes(String type, JsonNode attributes) {
+        var result = object();
+        JsonNode mapping = types.definition(type).storage().path("fields");
+        for (var field : attributes.properties()) result.set(text(mapping, field.getKey()), field.getValue());
+        return result;
     }
     public void commit(JsonNode doc, JsonNode attributes, int version, JsonNode createdVersion,
                        JsonNode changedVersion, JsonNode createdFile, JsonNode retiredFile,
@@ -74,11 +86,11 @@ public class PlatformDocumentVersionRepository implements DocumentVersionReposit
         if (createdVersion != null) {
             if (changedVersion == null || createdFile != null || retiredFile != null)
                 throw new IllegalArgumentException("Invalid attribute version transaction");
-            operation = text(doc.path("documentType"), "id").equals("KID_OPS") ? "commitKidOpsAttributes" : "commitDocumentAttributes";
-            var details = copy(attributes);
+            operation = text(types.definition(text(doc.path("documentType"), "id")).storage().path("operations"), "update");
+            var details = mappedAttributes(text(doc.path("documentType"), "id"), attributes);
             details.put("id", text(doc, "detailsId"));
             vars.set("details", details);
-            vars.set("detailsCompare", doc.path("attributes"));
+            vars.set("detailsCompare", mappedAttributes(text(doc.path("documentType"), "id"), doc.path("attributes")));
             vars.set("version", createdVersion);
             vars.set("previous", changedVersion);
         } else if (changedVersion != null) {

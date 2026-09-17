@@ -123,6 +123,31 @@ public class DocumentVersionService {
         if (!hash.equals(text(receipt, "requestHash"))) throw new ApiException(409, "requestId уже использован для другой команды");
         return parse(text(receipt, "response"));
     }
+    /** Advisory current capabilities; every mutation rechecks the same policy and platform permissions. */
+    public JsonNode capabilities(String type, String id, AuthContext auth) {
+        State current = state(type, id, auth);
+        var actions = new ArrayList<String>();
+        int count = files(current.version).size();
+        for (String action : List.of("attributes", "upload", "replace", "delete")) {
+            try {
+                policy(type).authorize(current.document, action, auth);
+                if (!action.equals("attributes")) {
+                    if (!action.equals("upload") && count == 0) continue;
+                    policy(type).validateAttachmentCount(count + (action.equals("upload") ? 1 : action.equals("delete") ? -1 : 0));
+                }
+                actions.add(switch (action) {
+                    case "attributes" -> "EDIT";
+                    case "upload" -> "ADD_ATTACHMENT";
+                    case "replace" -> "REPLACE_ATTACHMENT";
+                    default -> "DELETE_ATTACHMENT";
+                });
+            } catch (ApiException error) {
+                if (error.status() != 400 && error.status() != 403 && error.status() != 409) throw error;
+            }
+        }
+        return object("capabilities", actions);
+    }
+
     public JsonNode update(String type, String id, JsonNode body, AuthContext auth) {
         JsonNode patch = policy(type).validate(body.path("attributes"));
         String key = requestKey(id, body, auth), hash = digest(write(object("action", "attributes", "body", body)));
@@ -135,6 +160,7 @@ public class DocumentVersionService {
                 || !text(body, "changeToken").equals(text(state.document, "changeToken")))
             throw new ApiException(409, "Документ или вложения изменены. Обновите карточку перед сохранением.");
         var attrs = attributes(state.version); patch.properties().forEach(e -> attrs.set(e.getKey(), e.getValue()));
+        policy(type).validateSnapshot(attrs);
         boolean changed = !attrs.equals(attributes(state.version));
         int version = (int) number(state.document, "version", 1) + (changed ? 1 : 0);
         JsonNode created = changed ? snapshot(state.document, version, policy(type).schemaVersion(), attrs, files(state.version), auth) : null;
@@ -179,6 +205,7 @@ public class DocumentVersionService {
             file.put("version", old == null ? 1 : number(old, "version", 1) + 1);
             file.put("current", true); created = file; manifest.add(file);
         }
+        policy(type).validateAttachmentCount(manifest.size());
         var changed = object("id", text(state.version, "id"), "attachments", write(manifest));
         JsonNode response = created == null ? object("deleted", true) : publicFile(created);
         // Manifests store public attachment IDs. Find the current storage handle before retirement.
