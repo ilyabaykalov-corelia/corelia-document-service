@@ -126,11 +126,13 @@ public class DocumentVersionService {
     /** Advisory current capabilities; every mutation rechecks the same policy and platform permissions. */
     public JsonNode capabilities(String type, String id, AuthContext auth) {
         State current = state(type, id, auth);
+        DocumentPolicy policy = policy(type);
+        JsonNode authorizationContext = policy.authorizationContext(current.document, auth);
         var actions = new ArrayList<String>();
         int count = files(current.version).size();
         for (String action : List.of("attributes", "upload", "replace", "delete")) {
             try {
-                policy(type).authorize(current.document, action, auth);
+                policy.authorize(current.document, action, auth, authorizationContext);
                 if (!action.equals("attributes")) {
                     if (!action.equals("upload") && count == 0) continue;
                     policy(type).validateAttachmentCount(count + (action.equals("upload") ? 1 : action.equals("delete") ? -1 : 0));
