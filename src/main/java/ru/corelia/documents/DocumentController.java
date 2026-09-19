@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.http.ApiRequest;
 import ru.corelia.integration.DocumentTypes;
@@ -77,6 +78,21 @@ public class DocumentController {
     public ResponseEntity<JsonNode> create(@PathVariable String type, HttpServletRequest request) {
         return ResponseEntity.status(201)
                 .body(documents.create(type, requests.body(request), requests.auth(request)));
+    }
+
+    @PostMapping(value = "/documents/{type}/stream", consumes = "multipart/form-data")
+    public ResponseEntity<JsonNode> createStream(
+            @PathVariable String type,
+            @RequestParam String requestId,
+            @RequestParam String attributes,
+            @RequestParam MultipartFile file,
+            HttpServletRequest request) {
+        try {
+            return ResponseEntity.status(201)
+                    .body(documents.createStream(type, requestId, ru.corelia.support.Json.parse(attributes), file, requests.auth(request)));
+        } catch (RuntimeException error) {
+            throw error;
+        }
     }
 
     @PatchMapping("/documents/{type}/{id}")
