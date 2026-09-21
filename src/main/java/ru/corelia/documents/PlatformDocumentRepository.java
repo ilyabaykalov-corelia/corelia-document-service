@@ -5,7 +5,6 @@ import static ru.corelia.support.Json.*;
 import org.springframework.stereotype.Component;
 
 import ru.corelia.auth.AuthContext;
-import ru.corelia.config.CoreliaConfig;
 import ru.corelia.http.ApiException;
 import ru.corelia.integration.DataSpaceClient;
 import ru.corelia.integration.DocumentTypes;
@@ -20,31 +19,33 @@ import java.util.*;
 public class PlatformDocumentRepository implements DocumentRepository {
     private final DocumentTypes types;
     private final DataSpaceClient data;
-    private final CoreliaConfig config;
 
-    public PlatformDocumentRepository(DocumentTypes types, DataSpaceClient data, CoreliaConfig config) {
+    public PlatformDocumentRepository(DocumentTypes types, DataSpaceClient data) {
         this.types = types;
         this.data = data;
-        this.config = config;
+    }
+
+    private static String condition(String field, String value) {
+        return "it." + field + " == '" + value.replace("'", "''") + "'";
     }
 
     private List<JsonNode> raw(String code, AuthContext auth) {
         types.requireType(code);
         List<JsonNode> result = new ArrayList<>();
-        long maximum = config.number("CORELIA_DOCUMENT_SCAN_LIMIT", 10000);
         for (int offset = 0; ; ) {
             JsonNode page =
-                    data.query(text(types.definition(code).storage().path("operations"), "search"), object("offset", offset, "limit", 500), auth)
+                    data.query(
+                                    text(types.definition(code).storage().path("operations"), "search"),
+                                    object(
+                                            "cond", condition("documentType.id", code),
+                                            "offset", offset,
+                                            "limit", 500),
+                                    auth)
                             .path("searchDocument");
             List<JsonNode> rows = list(page.path("elems"));
             result.addAll(rows.stream().filter(row -> code.equals(text(row.path("documentType"), "id"))).map(row -> ru.corelia.integration.DocumentProjection.document(row, types)).toList());
             offset += rows.size();
             if (rows.isEmpty() || offset >= number(page, "count", offset)) return result;
-            if (offset >= maximum)
-                throw new ApiException(
-                        422,
-                        "Превышен предел выборки документов; настройте фильтрацию в адаптере"
-                                + " платформы");
         }
     }
 
@@ -53,8 +54,17 @@ public class PlatformDocumentRepository implements DocumentRepository {
     }
 
     private JsonNode find(String code, String id, AuthContext auth) {
-        return raw(code, auth).stream()
+        types.requireType(code);
+        JsonNode page =
+                data.query(
+                                text(types.definition(code).storage().path("operations"), "search"),
+                                object("cond", condition("documentId", id), "offset", 0, "limit", 2),
+                                auth)
+                        .path("searchDocument");
+        return list(page.path("elems")).stream()
                 .filter(row -> id.equals(text(row, "documentId")))
+                .filter(row -> code.equals(text(row.path("documentType"), "id")))
+                .map(row -> ru.corelia.integration.DocumentProjection.document(row, types))
                 .findFirst()
                 .orElseThrow(() -> new ApiException(404, "Документ не найден"));
     }

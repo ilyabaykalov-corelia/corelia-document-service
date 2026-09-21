@@ -12,6 +12,10 @@ public interface DocumentPolicy {
     default void validateSnapshot(JsonNode attributes) {}
     default void validateAttachmentCount(int count) {}
     void authorize(JsonNode document, String action, AuthContext auth);
+    default JsonNode authorizationContext(JsonNode document, AuthContext auth) { return null; }
+    default void authorize(JsonNode document, String action, AuthContext auth, JsonNode context) {
+        authorize(document, action, auth);
+    }
     default void checkSchema(int version) {
         if (version != schemaVersion())
             throw new ApiException(409, "Версия схемы атрибутов не поддерживается этим видом документа");

@@ -4,9 +4,11 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.http.ApiRequest;
 import ru.corelia.integration.DocumentTypes;
+import ru.corelia.observability.CoreliaObservability;
 
 import tools.jackson.databind.JsonNode;
 
@@ -19,17 +21,20 @@ public class DocumentController {
     private final DocumentVersionService versions;
     private final DocumentService documents;
     private final ApiRequest requests;
+    private final CoreliaObservability observability;
 
     public DocumentController(DocumentTypes types,
             DocumentService documents,
             DocumentVersionService versions,
             ApiRequest requests,
-            ru.corelia.integration.DataSpaceClient data) {
+            ru.corelia.integration.DataSpaceClient data,
+            CoreliaObservability observability) {
         this.types = types;
         this.versions = versions;
         this.data = data;
         this.documents = documents;
         this.requests = requests;
+        this.observability = observability;
     }
 
     @GetMapping("/document-types/available")
@@ -75,14 +80,35 @@ public class DocumentController {
 
     @PostMapping("/documents/{type}")
     public ResponseEntity<JsonNode> create(@PathVariable String type, HttpServletRequest request) {
-        return ResponseEntity.status(201)
-                .body(documents.create(type, requests.body(request), requests.auth(request)));
+        JsonNode result = observability.observe(
+                "document.create", () -> documents.create(type, requests.body(request), requests.auth(request)));
+        observability.documentCreated(type);
+        return ResponseEntity.status(201).body(result);
+    }
+
+    @PostMapping(value = "/documents/{type}/stream", consumes = "multipart/form-data")
+    public ResponseEntity<JsonNode> createStream(
+            @PathVariable String type,
+            @RequestParam String requestId,
+            @RequestParam String attributes,
+            @RequestParam MultipartFile file,
+            HttpServletRequest request) {
+        try {
+            JsonNode result = observability.observe(
+                    "document.create",
+                    () -> documents.createStream(type, requestId, ru.corelia.support.Json.parse(attributes), file, requests.auth(request)));
+            observability.documentCreated(type);
+            return ResponseEntity.status(201).body(result);
+        } catch (RuntimeException error) {
+            throw error;
+        }
     }
 
     @PatchMapping("/documents/{type}/{id}")
     public JsonNode update(
             @PathVariable String type, @PathVariable String id, HttpServletRequest request) {
-        return documents.update(type, id, requests.body(request), requests.auth(request));
+        return observability.observe(
+                "document.update", () -> documents.update(type, id, requests.body(request), requests.auth(request)));
     }
 
     @GetMapping("/documents/{type}/{id}/capabilities")

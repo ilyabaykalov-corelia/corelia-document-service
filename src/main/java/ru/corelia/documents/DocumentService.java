@@ -3,6 +3,7 @@ package ru.corelia.documents;
 import static ru.corelia.support.Json.*;
 
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
@@ -117,11 +118,12 @@ public class DocumentService {
         JsonNode attributes = types.validate(type, body.path("attributes"), false);
         String id = UUID.randomUUID().toString();
         var start = object("typeCode", type, "attributes", attributes);
-        if (types.initialAttachmentRequired(type)) {
+        boolean hasStagedAttachment = body.path("stagedInitialAttachment").isObject();
+        if (types.initialAttachmentRequired(type) || hasStagedAttachment) {
             String requestId = text(body, "requestId");
             try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
-            JsonNode file = body.path("initialAttachment");
-            if (!file.isObject() || text(file, "contentBase64").isEmpty())
+            JsonNode file = hasStagedAttachment ? body.path("stagedInitialAttachment") : body.path("initialAttachment");
+            if (!file.isObject() || !hasStagedAttachment && text(file, "contentBase64").isEmpty())
                 throw new ApiException(400, "Для создания документа требуется вложение");
             id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
             String key = hash("create:" + id), requestHash = hash(write(object("attributes", attributes, "file", file)));
@@ -130,7 +132,9 @@ public class DocumentService {
                 if (!requestHash.equals(text(receipt, "requestHash"))) throw new ApiException(409, "requestId уже использован для других данных");
                 return get(type, id, auth);
             }
-            JsonNode staged = services.call("attachment", "/internal/v1/initial-attachments/" + encode(id), "POST", object("attachment", file), auth);
+            JsonNode staged = hasStagedAttachment
+                    ? file
+                    : services.call("attachment", "/internal/v1/initial-attachments/" + encode(id), "POST", object("attachment", file), auth);
             start.set("initialAttachment", staged);
             start.put("creationKey", key); start.put("creationHash", requestHash);
         }
@@ -195,6 +199,28 @@ public class DocumentService {
                         + id
                         + " не появилась в DataSpace; идентификатор процесса: "
                         + instanceId);
+    }
+
+    public JsonNode createStream(
+            String type, String requestId, JsonNode attributes, MultipartFile file, AuthContext auth) {
+        types.requireType(type);
+        if (file.isEmpty()) throw new ApiException(400, "Для создания документа требуется вложение");
+        String id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        JsonNode staged;
+        try (var content = file.getInputStream()) {
+            staged = services.callMultipart(
+                    "attachment",
+                    "/internal/v1/staged-attachments/" + encode(id),
+                    "POST",
+                    Map.of("requestId", requestId),
+                    ru.corelia.integration.FileStorageClient.safeFileName(file.getOriginalFilename() == null ? "attachment.bin" : file.getOriginalFilename()),
+                    file.getContentType() == null ? "application/octet-stream" : file.getContentType(),
+                    content,
+                    auth);
+        } catch (java.io.IOException error) {
+            throw new ApiException(400, "Не удалось прочитать загружаемый файл");
+        }
+        return create(type, object("attributes", attributes, "requestId", requestId, "stagedInitialAttachment", staged), auth);
     }
 
     private static String searchValue(JsonNode value) {
