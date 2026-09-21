@@ -9,6 +9,7 @@ import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
 import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.support.LogJson;
+import ru.corelia.support.FileNames;
 import ru.corelia.transport.ServiceClient;
 
 import tools.jackson.databind.JsonNode;
@@ -213,7 +214,7 @@ public class DocumentService {
                     "/internal/v1/staged-attachments/" + encode(id),
                     "POST",
                     Map.of("requestId", requestId),
-                    ru.corelia.integration.FileStorageClient.safeFileName(file.getOriginalFilename() == null ? "attachment.bin" : file.getOriginalFilename()),
+                    FileNames.safe(file.getOriginalFilename() == null ? "attachment.bin" : file.getOriginalFilename()),
                     file.getContentType() == null ? "application/octet-stream" : file.getContentType(),
                     content,
                     auth);
