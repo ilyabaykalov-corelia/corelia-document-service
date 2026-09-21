@@ -14,6 +14,7 @@ import ru.corelia.config.LocalEnvironment;
             "ru.corelia.http",
             "ru.corelia.cache",
             "ru.corelia.integration",
+            "ru.corelia.platformv",
             "ru.corelia.transport",
             "ru.corelia.observability",
             "ru.corelia.documents"

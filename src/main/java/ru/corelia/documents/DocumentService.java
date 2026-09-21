@@ -11,6 +11,9 @@ import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.support.LogJson;
 import ru.corelia.support.FileNames;
 import ru.corelia.transport.ServiceClient;
+import ru.corelia.provider.DocumentStore;
+import ru.corelia.provider.model.DocumentSearchRequest;
+import ru.corelia.provider.model.DocumentSnapshot;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -23,16 +26,16 @@ public class DocumentService {
     private final DocumentTypeCatalog types;
     private final ru.corelia.auth.PermissionChecker permissions;
     private final DocumentVersionService versions;
-    private final DocumentRepository repository;
+    private final DocumentStore store;
     private final DocumentVersionRepository versionRepository;
     private final ServiceClient services;
 
-    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
         this.permissions = permissions;
         this.types = types;
         this.versionRepository = versionRepository;
         this.versions = versions;
-        this.repository = repository;
+        this.store = store;
         this.services = services;
     }
 
@@ -66,7 +69,7 @@ public class DocumentService {
             throw new ApiException(400, "Для этого вида не настроен поиск по дате");
         List<String> sorting = list(types.definition(type).ui().path("sortFields")).stream().map(v -> v.asString()).toList();
         List<JsonNode> result =
-                repository.all(type, auth).stream()
+                store.search(new DocumentSearchRequest(type, 0, 10000), auth).items().stream().map(this::publicDocument)
                         .filter(
                                 doc -> {
                                     if (status != null && !status.equals(text(doc, "status")))
@@ -226,6 +229,16 @@ public class DocumentService {
 
     private static String searchValue(JsonNode value) {
         return value.isTextual() || value.isNumber() || value.isBoolean() ? value.asString() : "";
+    }
+
+    private JsonNode publicDocument(DocumentSnapshot document) {
+        var attributes = object();
+        document.attributes().forEach(attributes::set);
+        var result = object("id", document.id(), "typeCode", document.typeCode(), "typeName", types.name(document.typeCode()),
+                "attributes", attributes, "status", document.status(), "statusLabel", types.label(document.typeCode(), document.status()));
+        if (!document.createdBy().isEmpty()) result.put("createdBy", document.createdBy());
+        if (document.createdAt() != null) result.put("createdAt", document.createdAt().toString());
+        return result;
     }
     private static int compareAttribute(JsonNode left, JsonNode right) {
         if (left.isNumber() && right.isNumber())
