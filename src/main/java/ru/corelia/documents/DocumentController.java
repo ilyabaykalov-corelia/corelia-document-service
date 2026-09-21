@@ -9,6 +9,7 @@ import org.springframework.web.multipart.MultipartFile;
 import ru.corelia.http.ApiRequest;
 import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.observability.CoreliaObservability;
+import ru.corelia.provider.DocumentTypeProvider;
 
 import tools.jackson.databind.JsonNode;
 
@@ -17,7 +18,7 @@ import tools.jackson.databind.JsonNode;
 @RequestMapping("/internal/v1")
 public class DocumentController {
     private final DocumentTypeCatalog types;
-    private final ru.corelia.integration.DataSpaceClient data;
+    private final DocumentTypeProvider availableTypes;
     private final DocumentVersionService versions;
     private final DocumentService documents;
     private final ApiRequest requests;
@@ -27,11 +28,11 @@ public class DocumentController {
             DocumentService documents,
             DocumentVersionService versions,
             ApiRequest requests,
-            ru.corelia.integration.DataSpaceClient data,
+            DocumentTypeProvider availableTypes,
             CoreliaObservability observability) {
         this.types = types;
         this.versions = versions;
-        this.data = data;
+        this.availableTypes = availableTypes;
         this.documents = documents;
         this.requests = requests;
         this.observability = observability;
@@ -39,14 +40,9 @@ public class DocumentController {
 
     @GetMapping("/document-types/available")
     public JsonNode available(HttpServletRequest request) {
-        JsonNode page =
-                data.query(
-                                "refDocumentTypeListGet",
-                                ru.corelia.support.Json.object(),
-                                requests.auth(request))
-                        .path("searchDocumentType");
-        return ru.corelia.support.Json.object(
-                "items", page.path("elems"), "total", page.path("count"));
+        var items = availableTypes.available(requests.auth(request)).stream()
+                .map(type -> ru.corelia.support.Json.object("id", type.code(), "name", type.name())).toList();
+        return ru.corelia.support.Json.object("items", items, "total", items.size());
     }
 
     @GetMapping("/document-types")

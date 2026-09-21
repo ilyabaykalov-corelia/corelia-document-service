@@ -12,6 +12,7 @@ import ru.corelia.support.LogJson;
 import ru.corelia.support.FileNames;
 import ru.corelia.transport.ServiceClient;
 import ru.corelia.provider.DocumentStore;
+import ru.corelia.provider.DocumentVersionStore;
 import ru.corelia.provider.model.DocumentSearchRequest;
 import ru.corelia.provider.model.DocumentSnapshot;
 
@@ -27,13 +28,13 @@ public class DocumentService {
     private final ru.corelia.auth.PermissionChecker permissions;
     private final DocumentVersionService versions;
     private final DocumentStore store;
-    private final DocumentVersionRepository versionRepository;
+    private final DocumentVersionStore versionStore;
     private final ServiceClient services;
 
-    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionStore versionStore) {
         this.permissions = permissions;
         this.types = types;
-        this.versionRepository = versionRepository;
+        this.versionStore = versionStore;
         this.versions = versions;
         this.store = store;
         this.services = services;
@@ -131,9 +132,9 @@ public class DocumentService {
                 throw new ApiException(400, "Для создания документа требуется вложение");
             id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
             String key = hash("create:" + id), requestHash = hash(write(object("attributes", attributes, "file", file)));
-            JsonNode receipt = versionRepository.receipt(key, auth);
+            var receipt = versionStore.receipt(key, auth);
             if (receipt != null) {
-                if (!requestHash.equals(text(receipt, "requestHash"))) throw new ApiException(409, "requestId уже использован для других данных");
+                if (!requestHash.equals(receipt.requestHash())) throw new ApiException(409, "requestId уже использован для других данных");
                 return get(type, id, auth);
             }
             JsonNode staged = hasStagedAttachment
@@ -152,7 +153,7 @@ public class DocumentService {
                         auth);
         String instanceId = text(instance, "id");
         LogJson.info(
-                "Platform V document process start response",
+                "Получен ответ о запуске процесса документа",
                 object(
                         "documentId", id,
                         "documentType", type,
@@ -179,7 +180,7 @@ public class DocumentService {
                             auth);
                 } catch (ApiException error) {
                     LogJson.info(
-                            "Platform V process instance status is unavailable",
+                            "Недоступен статус экземпляра процесса",
                             object(
                                     "documentId",
                                     id,
@@ -195,13 +196,13 @@ public class DocumentService {
             pause(500);
         }
         LogJson.info(
-                "Platform V process did not create document in time",
+                "Процесс не создал карточку документа за отведённое время",
                 object("documentId", id, "processInstanceId", instanceId));
         throw new ApiException(
                 502,
                 "Процесс запущен, но карточка документа "
                         + id
-                        + " не появилась в DataSpace; идентификатор процесса: "
+                        + " не появилась в хранилище; идентификатор процесса: "
                         + instanceId);
     }
 
