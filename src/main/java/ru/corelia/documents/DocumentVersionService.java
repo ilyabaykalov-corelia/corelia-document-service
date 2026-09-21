@@ -4,6 +4,8 @@ import static ru.corelia.support.Json.*;
 import org.springframework.stereotype.Service;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
+import ru.corelia.provider.DocumentStore;
+import ru.corelia.provider.model.DocumentSnapshot;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -18,9 +20,9 @@ import java.util.*;
 @Service
 public class DocumentVersionService {
     private final DocumentVersionRepository repository;
-    private final DocumentRepository documents;
+    private final DocumentStore documents;
     private final List<DocumentPolicy> policies;
-    public DocumentVersionService(DocumentVersionRepository repository, DocumentRepository documents, List<DocumentPolicy> policies) {
+    public DocumentVersionService(DocumentVersionRepository repository, DocumentStore documents, List<DocumentPolicy> policies) {
         this.repository = repository; this.documents = documents; this.policies = List.copyOf(policies);
     }
     private record State(JsonNode document, JsonNode version, List<JsonNode> versions) {}
@@ -74,6 +76,13 @@ public class DocumentVersionService {
         String manifest = text(version, "attachments");
         return manifest.isEmpty() ? List.of() : list(parse(manifest));
     }
+    private static ObjectNode publicDocument(DocumentSnapshot document) {
+        var attributes = object(); document.attributes().forEach(attributes::set);
+        var result = object("id", document.id(), "typeCode", document.typeCode(), "attributes", attributes, "status", document.status());
+        if (!document.createdBy().isEmpty()) result.put("createdBy", document.createdBy());
+        if (document.createdAt() != null) result.put("createdAt", document.createdAt().toString());
+        return result;
+    }
     private static boolean current(JsonNode file) { return !file.path("current").isBoolean() || file.path("current").asBoolean(); }
     private static String logical(JsonNode file) { return first(file, "logicalAttachmentId", "attachmentId", "id"); }
     public static JsonNode publicFile(JsonNode file) {
@@ -83,7 +92,7 @@ public class DocumentVersionService {
         return result;
     }
     private JsonNode view(String type, String id, State state, JsonNode selected, AuthContext auth) {
-        var result = copy(documents.get(type, id, auth));
+        var result = publicDocument(documents.get(type, id, auth));
         policy(type).checkSchema((int) number(selected, "schemaVersion", 0));
         result.set("attributes", attributes(selected));
         result.put("version", number(selected, "version", 1));
