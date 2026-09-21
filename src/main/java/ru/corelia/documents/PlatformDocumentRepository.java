@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
 import ru.corelia.integration.DataSpaceClient;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -17,10 +17,10 @@ import java.util.*;
 /** Адаптер моделей документов: использует зарегистрированные в Platform V операции GraphQL. */
 @Component
 public class PlatformDocumentRepository implements DocumentRepository {
-    private final DocumentTypes types;
+    private final DocumentTypeCatalog types;
     private final DataSpaceClient data;
 
-    public PlatformDocumentRepository(DocumentTypes types, DataSpaceClient data) {
+    public PlatformDocumentRepository(DocumentTypeCatalog types, DataSpaceClient data) {
         this.types = types;
         this.data = data;
     }

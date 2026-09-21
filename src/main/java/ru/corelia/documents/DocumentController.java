@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.http.ApiRequest;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.observability.CoreliaObservability;
 
 import tools.jackson.databind.JsonNode;
@@ -16,14 +16,14 @@ import tools.jackson.databind.JsonNode;
 @RestController
 @RequestMapping("/internal/v1")
 public class DocumentController {
-    private final DocumentTypes types;
+    private final DocumentTypeCatalog types;
     private final ru.corelia.integration.DataSpaceClient data;
     private final DocumentVersionService versions;
     private final DocumentService documents;
     private final ApiRequest requests;
     private final CoreliaObservability observability;
 
-    public DocumentController(DocumentTypes types,
+    public DocumentController(DocumentTypeCatalog types,
             DocumentService documents,
             DocumentVersionService versions,
             ApiRequest requests,

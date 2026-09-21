@@ -7,7 +7,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.support.LogJson;
 import ru.corelia.transport.ServiceClient;
 
@@ -19,14 +19,14 @@ import java.util.*;
 /** API карточек документов; история управляется ядром, создание пока делегируется существующему процессу. */
 @Service
 public class DocumentService {
-    private final DocumentTypes types;
+    private final DocumentTypeCatalog types;
     private final ru.corelia.auth.PermissionChecker permissions;
     private final DocumentVersionService versions;
     private final DocumentRepository repository;
     private final DocumentVersionRepository versionRepository;
     private final ServiceClient services;
 
-    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypes types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
         this.permissions = permissions;
         this.types = types;
         this.versionRepository = versionRepository;

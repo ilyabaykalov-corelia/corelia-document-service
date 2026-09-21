@@ -4,7 +4,7 @@ import static ru.corelia.support.Json.*;
 import org.springframework.stereotype.Component;
 import ru.corelia.auth.AuthContext;
 import ru.corelia.integration.DataSpaceClient;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.http.ApiException;
 import tools.jackson.databind.JsonNode;
 import java.util.*;
@@ -12,9 +12,9 @@ import java.util.*;
 /** DataSpace-specific formats and transaction boundaries stay in this adapter. */
 @Component
 public class PlatformDocumentVersionRepository implements DocumentVersionRepository {
-    private final DocumentTypes types;
+    private final DocumentTypeCatalog types;
     private final DataSpaceClient data;
-    public PlatformDocumentVersionRepository(DocumentTypes types, DataSpaceClient data) {
+    public PlatformDocumentVersionRepository(DocumentTypeCatalog types, DataSpaceClient data) {
         this.types = types; this.data = data; }
 
     private static String condition(String field, String value) {
