@@ -25,13 +25,13 @@ import java.util.*;
 @Service
 public class DocumentService {
     private final DocumentTypeCatalog types;
-    private final ru.corelia.auth.PermissionChecker permissions;
+    private final ru.corelia.provider.PermissionProvider permissions;
     private final DocumentVersionService versions;
     private final DocumentStore store;
     private final DocumentVersionStore versionStore;
     private final ServiceClient services;
 
-    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionStore versionStore) {
+    public DocumentService(ru.corelia.provider.PermissionProvider permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionStore versionStore) {
         this.permissions = permissions;
         this.types = types;
         this.versionStore = versionStore;

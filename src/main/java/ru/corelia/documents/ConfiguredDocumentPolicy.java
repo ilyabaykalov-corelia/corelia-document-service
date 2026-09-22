@@ -12,8 +12,8 @@ public final class ConfiguredDocumentPolicy implements DocumentPolicy {
     private final ServiceClient services;
     private final DocumentTypeCatalog types;
     private final String type;
-    private final ru.corelia.auth.PermissionChecker permissions;
-    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypeCatalog types, String type, ru.corelia.auth.PermissionChecker permissions) {
+    private final ru.corelia.provider.PermissionProvider permissions;
+    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypeCatalog types, String type, ru.corelia.provider.PermissionProvider permissions) {
         this.permissions = permissions; this.services = services; this.types = types; this.type = type;
     }
     public String type() { return type; }
