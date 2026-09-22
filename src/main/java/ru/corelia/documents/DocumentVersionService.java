@@ -11,6 +11,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.springframework.stereotype.Service;
 import ru.corelia.auth.AuthContext;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.http.ApiException;
 import ru.corelia.provider.DocumentStore;
 import ru.corelia.provider.DocumentVersionStore;
@@ -24,8 +25,9 @@ public class DocumentVersionService {
     private final DocumentVersionStore versions;
     private final DocumentStore documents;
     private final List<DocumentPolicy> policies;
-    public DocumentVersionService(DocumentVersionStore versions, DocumentStore documents, List<DocumentPolicy> policies) {
-        this.versions = versions; this.documents = documents; this.policies = List.copyOf(policies);
+    private final DocumentTypeCatalog types;
+    public DocumentVersionService(DocumentVersionStore versions, DocumentStore documents, List<DocumentPolicy> policies, DocumentTypeCatalog types) {
+        this.versions = versions; this.documents = documents; this.policies = List.copyOf(policies); this.types = types;
     }
     private static Instant now() { return LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS).toInstant(ZoneOffset.UTC); }
     private static String digest(String value) {
@@ -36,8 +38,10 @@ public class DocumentVersionService {
             .orElseThrow(() -> new ApiException(400, "Неизвестный вид документа")); }
     private static ObjectNode attributes(Map<String, JsonNode> values) { var result = object(); values.forEach(result::set); return result; }
     private static Map<String, JsonNode> map(JsonNode values) { var result = new LinkedHashMap<String, JsonNode>(); values.properties().forEach(item -> result.put(item.getKey(), item.getValue())); return result; }
-    private static ObjectNode document(DocumentSnapshot value) {
-        var result = object("id", value.id(), "documentId", value.id(), "typeCode", value.typeCode(), "status", value.status(), "version", value.currentVersion(), "changeToken", value.changeToken(), "attributes", attributes(value.attributes()));
+    private ObjectNode document(DocumentSnapshot value) {
+        var result = object("id", value.id(), "documentId", value.id(), "typeCode", value.typeCode(), "typeName", types.name(value.typeCode()),
+                "status", value.status(), "statusLabel", types.label(value.typeCode(), value.status()), "statusTone", types.tone(value.typeCode(), value.status()),
+                "version", value.currentVersion(), "changeToken", value.changeToken(), "attributes", attributes(value.attributes()));
         if (!value.createdBy().isEmpty()) result.put("createdBy", value.createdBy()); if (value.createdAt() != null) result.put("createdAt", value.createdAt().toString()); return result;
     }
     private DocumentVersion snapshot(DocumentSnapshot value, int number, ObjectNode attrs, List<AttachmentMetadata> files, AuthContext auth) {
