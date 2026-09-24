@@ -7,31 +7,37 @@ import org.springframework.web.multipart.MultipartFile;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.support.LogJson;
+import ru.corelia.support.FileNames;
 import ru.corelia.transport.ServiceClient;
+import ru.corelia.provider.DocumentStore;
+import ru.corelia.provider.DocumentVersionStore;
+import ru.corelia.provider.model.DocumentSearchRequest;
+import ru.corelia.provider.model.DocumentSnapshot;
+import ru.corelia.provider.model.DocumentCreation;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.*;
 
-/** API карточек документов; история управляется ядром, создание пока делегируется существующему процессу. */
+/** API карточек документов; история и создание управляются ядром. */
 @Service
 public class DocumentService {
-    private final DocumentTypes types;
-    private final ru.corelia.auth.PermissionChecker permissions;
+    private final DocumentTypeCatalog types;
+    private final ru.corelia.provider.PermissionProvider permissions;
     private final DocumentVersionService versions;
-    private final DocumentRepository repository;
-    private final DocumentVersionRepository versionRepository;
+    private final DocumentStore store;
+    private final DocumentVersionStore versionStore;
     private final ServiceClient services;
 
-    public DocumentService(ru.corelia.auth.PermissionChecker permissions, DocumentTypes types, DocumentRepository repository, ServiceClient services, DocumentVersionService versions, DocumentVersionRepository versionRepository) {
+    public DocumentService(ru.corelia.provider.PermissionProvider permissions, DocumentTypeCatalog types, DocumentStore store, ServiceClient services, DocumentVersionService versions, DocumentVersionStore versionStore) {
         this.permissions = permissions;
         this.types = types;
-        this.versionRepository = versionRepository;
+        this.versionStore = versionStore;
         this.versions = versions;
-        this.repository = repository;
+        this.store = store;
         this.services = services;
     }
 
@@ -65,7 +71,7 @@ public class DocumentService {
             throw new ApiException(400, "Для этого вида не настроен поиск по дате");
         List<String> sorting = list(types.definition(type).ui().path("sortFields")).stream().map(v -> v.asString()).toList();
         List<JsonNode> result =
-                repository.all(type, auth).stream()
+                store.search(new DocumentSearchRequest(type, 0, 10000), auth).items().stream().map(this::publicDocument)
                         .filter(
                                 doc -> {
                                     if (status != null && !status.equals(text(doc, "status")))
@@ -116,89 +122,64 @@ public class DocumentService {
         types.requireType(type);
         permissions.require(text(types.definition(type).authorization(), "createPermission"), auth);
         JsonNode attributes = types.validate(type, body.path("attributes"), false);
-        String id = UUID.randomUUID().toString();
-        var start = object("typeCode", type, "attributes", attributes);
-        boolean hasStagedAttachment = body.path("stagedInitialAttachment").isObject();
-        if (types.initialAttachmentRequired(type) || hasStagedAttachment) {
-            String requestId = text(body, "requestId");
-            try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
-            JsonNode file = hasStagedAttachment ? body.path("stagedInitialAttachment") : body.path("initialAttachment");
-            if (!file.isObject() || !hasStagedAttachment && text(file, "contentBase64").isEmpty())
-                throw new ApiException(400, "Для создания документа требуется вложение");
-            id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-            String key = hash("create:" + id), requestHash = hash(write(object("attributes", attributes, "file", file)));
-            JsonNode receipt = versionRepository.receipt(key, auth);
-            if (receipt != null) {
-                if (!requestHash.equals(text(receipt, "requestHash"))) throw new ApiException(409, "requestId уже использован для других данных");
-                return get(type, id, auth);
-            }
-            JsonNode staged = hasStagedAttachment
-                    ? file
-                    : services.call("attachment", "/internal/v1/initial-attachments/" + encode(id), "POST", object("attachment", file), auth);
-            start.set("initialAttachment", staged);
-            start.put("creationKey", key); start.put("creationHash", requestHash);
-        }
-        start.put("documentId", id);
-        JsonNode instance =
-                services.call(
-                        "workflow",
-                        "/internal/v1/processes/start",
-                        "POST",
-                        start,
-                        auth);
+        String requestId = text(body, "requestId");
+        try { UUID.fromString(requestId); } catch (IllegalArgumentException e) { throw new ApiException(400, "Для создания требуется requestId UUID"); }
+        String id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        String creationKey = hash("create:" + id);
+        JsonNode suppliedAttachment = body.path("stagedInitialAttachment").isObject() ? body.path("stagedInitialAttachment") : body.path("initialAttachment");
+        String creationHash = hash(write(object("attributes", attributes, "file", suppliedAttachment)));
+        var receipt = versionStore.receipt(creationKey, auth);
+        if (receipt != null && !creationHash.equals(receipt.requestHash()))
+            throw new ApiException(409, "requestId уже использован для других данных");
+        if (receipt == null)
+            store.create(new DocumentCreation(id, type, map(attributes), types.initialStatus(type),
+                    auth.login(), java.time.Instant.now(), null, creationKey, creationHash), auth);
+
+        JsonNode initialAttachment = body.path("initialAttachment");
+        if (initialAttachment.isObject())
+            services.call("attachment", "/internal/v1/documents/" + encode(type) + "/" + encode(id) + "/attachments", "POST",
+                    object("requestId", requestId, "attachments", List.of(initialAttachment)), auth);
+        if (types.initialAttachmentRequired(type) && !initialAttachment.isObject()) return get(type, id, auth);
+
+        JsonNode instance = startWorkflow(type, id, attributes, creationKey, creationHash, auth);
         String instanceId = text(instance, "id");
         LogJson.info(
-                "Platform V document process start response",
+                "Получен ответ о запуске процесса документа",
                 object(
                         "documentId", id,
                         "documentType", type,
                         "processInstanceId", instanceId,
                         "state", text(instance, "state")));
-        JsonNode variables = instance.path("globalVariables");
-        String returned = text(unwrap(variables.path("documentId")));
-        if (!returned.isEmpty()) id = returned;
-        for (int attempt = 0; attempt < 30; attempt++) {
-            try {
-                ObjectNode result = copy(get(type, id, auth));
-                result.put("processInstanceId", instanceId);
-                return result;
-            } catch (ApiException error) {
-                if (error.status() != 404) throw error;
-            }
-            if (!instanceId.isEmpty() && attempt % 3 == 0) {
-                try {
-                    services.call(
-                            "workflow",
-                            "/internal/v1/processes/" + encode(instanceId),
-                            "GET",
-                            null,
-                            auth);
-                } catch (ApiException error) {
-                    LogJson.info(
-                            "Platform V process instance status is unavailable",
-                            object(
-                                    "documentId",
-                                    id,
-                                    "processInstanceId",
-                                    instanceId,
-                                    "status",
-                                    error.status(),
-                                    "message",
-                                    error.getMessage()));
-                    throw error;
-                }
-            }
-            pause(500);
-        }
-        LogJson.info(
-                "Platform V process did not create document in time",
-                object("documentId", id, "processInstanceId", instanceId));
-        throw new ApiException(
-                502,
-                "Процесс запущен, но карточка документа "
-                        + id
-                        + " не появилась в DataSpace; идентификатор процесса: "
-                        + instanceId);
+        ObjectNode result = copy(get(type, id, auth));
+        result.put("processInstanceId", instanceId);
+        return result;
+    }
+
+    /** Запускает процесс только для уже сохранённого документа, когда выполнены configured prerequisites. */
+    public JsonNode startWorkflowWhenReady(String type, String id, AuthContext auth) {
+        types.requireType(type);
+        var document = store.get(type, id, auth);
+        if (types.initialAttachmentRequired(type)
+                && versionStore.attachments(id, auth).stream().noneMatch(ru.corelia.provider.model.AttachmentMetadata::current))
+            return object("started", false, "documentId", id, "state", "WAITING_FOR_ATTACHMENT");
+        return startWorkflow(type, id, attributes(document.attributes()), "", "", auth);
+    }
+
+    private JsonNode startWorkflow(
+            String type, String id, JsonNode attributes, String creationKey, String creationHash, AuthContext auth) {
+        return services.call(
+                "workflow",
+                "/internal/v1/processes/start",
+                "POST",
+                object("typeCode", type, "documentId", id, "attributes", attributes,
+                        "creationKey", creationKey, "creationHash", creationHash),
+                auth);
+    }
+
+    private static ObjectNode attributes(java.util.Map<String, JsonNode> values) {
+        ObjectNode result = object();
+        values.forEach(result::set);
+        return result;
     }
 
     public JsonNode createStream(
@@ -206,25 +187,38 @@ public class DocumentService {
         types.requireType(type);
         if (file.isEmpty()) throw new ApiException(400, "Для создания документа требуется вложение");
         String id = UUID.nameUUIDFromBytes((auth.login() + ":" + type + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-        JsonNode staged;
-        try (var content = file.getInputStream()) {
-            staged = services.callMultipart(
-                    "attachment",
-                    "/internal/v1/staged-attachments/" + encode(id),
-                    "POST",
-                    Map.of("requestId", requestId),
-                    ru.corelia.integration.FileStorageClient.safeFileName(file.getOriginalFilename() == null ? "attachment.bin" : file.getOriginalFilename()),
-                    file.getContentType() == null ? "application/octet-stream" : file.getContentType(),
-                    content,
-                    auth);
+        byte[] content;
+        try (var input = file.getInputStream()) {
+            content = input.readAllBytes();
         } catch (java.io.IOException error) {
             throw new ApiException(400, "Не удалось прочитать загружаемый файл");
         }
-        return create(type, object("attributes", attributes, "requestId", requestId, "stagedInitialAttachment", staged), auth);
+        return create(type, object("attributes", attributes, "requestId", requestId,
+                "initialAttachment", object("fileName", FileNames.safe(file.getOriginalFilename() == null ? "attachment.bin" : file.getOriginalFilename()),
+                        "contentType", file.getContentType() == null ? "application/octet-stream" : file.getContentType(),
+                        "contentBase64", Base64.getEncoder().encodeToString(content))), auth);
     }
 
     private static String searchValue(JsonNode value) {
         return value.isTextual() || value.isNumber() || value.isBoolean() ? value.asString() : "";
+    }
+
+    private static Map<String, JsonNode> map(JsonNode node) {
+        var result = new LinkedHashMap<String, JsonNode>();
+        node.properties().forEach(entry -> result.put(entry.getKey(), entry.getValue().deepCopy()));
+        return result;
+    }
+
+
+    private JsonNode publicDocument(DocumentSnapshot document) {
+        var attributes = object();
+        document.attributes().forEach(attributes::set);
+        var result = object("id", document.id(), "typeCode", document.typeCode(), "typeName", types.name(document.typeCode()),
+                "attributes", attributes, "status", document.status(), "statusLabel", types.label(document.typeCode(), document.status()),
+                "statusTone", types.tone(document.typeCode(), document.status()));
+        if (!document.createdBy().isEmpty()) result.put("createdBy", document.createdBy());
+        if (document.createdAt() != null) result.put("createdAt", document.createdAt().toString());
+        return result;
     }
     private static int compareAttribute(JsonNode left, JsonNode right) {
         if (left.isNumber() && right.isNumber())

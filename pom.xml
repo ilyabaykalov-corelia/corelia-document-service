@@ -10,7 +10,7 @@
     <dependencies>
         <dependency>
             <groupId>ru.corelia</groupId>
-            <artifactId>corelia-platform-v</artifactId>
+            <artifactId>corelia-provider-spi</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

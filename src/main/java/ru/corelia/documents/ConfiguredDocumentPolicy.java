@@ -4,16 +4,16 @@ import static ru.corelia.support.Json.*;
 
 import ru.corelia.auth.AuthContext;
 import ru.corelia.http.ApiException;
-import ru.corelia.integration.DocumentTypes;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import ru.corelia.transport.ServiceClient;
 import tools.jackson.databind.JsonNode;
 
 public final class ConfiguredDocumentPolicy implements DocumentPolicy {
     private final ServiceClient services;
-    private final DocumentTypes types;
+    private final DocumentTypeCatalog types;
     private final String type;
-    private final ru.corelia.auth.PermissionChecker permissions;
-    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypes types, String type, ru.corelia.auth.PermissionChecker permissions) {
+    private final ru.corelia.provider.PermissionProvider permissions;
+    public ConfiguredDocumentPolicy(ServiceClient services, DocumentTypeCatalog types, String type, ru.corelia.provider.PermissionProvider permissions) {
         this.permissions = permissions; this.services = services; this.types = types; this.type = type;
     }
     public String type() { return type; }
