@@ -76,6 +76,46 @@ public class DocumentVersionService {
         DocumentVersionState state = state(type, id, auth);
         return object("items", state.versions().stream().sorted(Comparator.comparingInt(DocumentVersion::number).reversed()).map(value -> object("version", value.number(), "createdBy", value.createdBy(), "createdAt", timestamp(value.createdAt()), "closedAt", timestamp(value.closedAt()), "current", value.number() == state.document().currentVersion())).toList());
     }
+    /** Формирует журнал из неизменяемых снимков, не завися от реализации хранилища. */
+    public JsonNode history(String type, String id, AuthContext auth) {
+        List<DocumentVersion> snapshots = new ArrayList<>(state(type, id, auth).versions());
+        snapshots.sort(Comparator.comparingInt(DocumentVersion::number));
+        var items = new ArrayList<JsonNode>();
+        for (int index = 0; index < snapshots.size(); index++) {
+            DocumentVersion current = snapshots.get(index);
+            if (index == 0) { items.add(historyItem(current, "DOCUMENT_CREATED", "created", "", null, null, null)); continue; }
+            DocumentVersion previous = snapshots.get(index - 1);
+            var fields = new TreeSet<String>(); fields.addAll(previous.attributes().keySet()); fields.addAll(current.attributes().keySet());
+            for (String field : fields) {
+                JsonNode oldValue = previous.attributes().get(field), newValue = current.attributes().get(field);
+                if (Objects.equals(oldValue, newValue)) continue;
+                String action = empty(oldValue) ? "ATTRIBUTE_SET" : empty(newValue) ? "ATTRIBUTE_CLEARED" : "ATTRIBUTE_CHANGED";
+                items.add(historyItem(current, action, field, label(type, field), oldValue, newValue, null));
+            }
+            Map<String, AttachmentMetadata> oldFiles = files(previous.attachments()), newFiles = files(current.attachments());
+            var attachmentIds = new TreeSet<String>(); attachmentIds.addAll(oldFiles.keySet()); attachmentIds.addAll(newFiles.keySet());
+            for (String logicalId : attachmentIds) {
+                AttachmentMetadata oldFile = oldFiles.get(logicalId), newFile = newFiles.get(logicalId);
+                if (oldFile == null) items.add(historyItem(current, "ATTACHMENT_ADDED", "", "", null, null, attachment(null, newFile)));
+                else if (newFile == null) items.add(historyItem(current, "ATTACHMENT_DELETED", "", "", null, null, attachment(oldFile, null)));
+                else if (!oldFile.id().equals(newFile.id())) items.add(historyItem(current, "ATTACHMENT_REPLACED", "", "", null, null, attachment(oldFile, newFile)));
+            }
+        }
+        items.sort(Comparator.comparing((JsonNode value) -> value.path("timestamp").asText()).reversed());
+        return object("items", items);
+    }
+    private static boolean empty(JsonNode value) { return value == null || value.isNull() || (value.isTextual() && value.asText().isEmpty()); }
+    private String label(String type, String field) { String value = text(types.publicDefinition(type).path("schema").path("properties").path(field), "title"); return value.isEmpty() ? field : value; }
+    private static Map<String, AttachmentMetadata> files(List<AttachmentMetadata> values) { var result = new HashMap<String, AttachmentMetadata>(); values.forEach(value -> result.put(value.logicalId(), value)); return result; }
+    private static JsonNode attachment(AttachmentMetadata oldFile, AttachmentMetadata newFile) {
+        var result = object("attachmentId", newFile != null ? newFile.logicalId() : oldFile.logicalId());
+        if (oldFile != null) result.put("oldFileName", oldFile.fileName()); if (newFile != null) result.put("newFileName", newFile.fileName()); return result;
+    }
+    private static JsonNode historyItem(DocumentVersion version, String action, String field, String fieldLabel, JsonNode oldValue, JsonNode newValue, JsonNode attachment) {
+        var result = object("id", version.number() + ":" + action + ":" + field + ":" + (attachment == null ? "" : text(attachment, "attachmentId")), "timestamp", timestamp(version.createdAt()), "userLogin", version.createdBy(), "action", action);
+        if (!field.isEmpty()) { result.put("field", field); result.put("fieldLabel", fieldLabel); }
+        if (oldValue != null) result.set("oldValue", oldValue); if (newValue != null) result.set("newValue", newValue); if (attachment != null) result.set("attachment", attachment); return result;
+    }
     private static String timestamp(Instant value) { return value == null ? "" : value.toString(); }
     private static String requestKey(String id, JsonNode body, AuthContext auth) {
         String requestId = text(body, "requestId"); try { UUID.fromString(requestId); } catch (IllegalArgumentException error) { throw new ApiException(400, "Требуется requestId в формате UUID"); }
@@ -122,10 +162,12 @@ public class DocumentVersionService {
         DocumentVersionState state = state(type, id, auth); policy(type).authorize(document(state.document()), action, auth); policy(type).checkSchema(state.currentVersion().schemaVersion()); List<AttachmentMetadata> manifest = new ArrayList<>(state.currentVersion().attachments()); AttachmentMetadata old = null;
         if (!action.equals("upload")) { old = manifest.stream().filter(file -> text(body, "attachmentId").equals(file.id())).findFirst().orElseThrow(() -> new ApiException(409, "Вложение уже заменено или удалено. Обновите карточку.")); manifest.remove(old); }
         AttachmentMetadata created = null; if (!action.equals("delete")) { created = attachment(body.path("file"), id, old == null ? 1 : old.version() + 1, old == null ? "" : old.logicalId()); manifest.add(created); }
-        policy(type).validateAttachmentCount(manifest.size()); DocumentVersion changed = changed(state.currentVersion(), null, manifest); JsonNode response = created == null ? object("deleted", true) : publicFile(created);
+        policy(type).validateAttachmentCount(manifest.size()); int number = state.document().currentVersion() + 1;
+        DocumentVersion next = snapshot(state.document(), number, attributes(state.currentVersion().attributes()), manifest, auth);
+        DocumentVersion changed = changed(state.currentVersion(), now(), state.currentVersion().attachments()); JsonNode response = created == null ? object("deleted", true) : publicFile(created);
         String retiredId = old == null ? "" : old.id();
         AttachmentMetadata retired = old == null ? null : state.attachments().stream().filter(file -> file.id().equals(retiredId)).findFirst().orElseThrow(() -> new ApiException(502, "Не найдены метаданные вложения"));
-        return commit(state, object(), null, changed, created, retired, key, hash, response, auth);
+        return commit(state, attributes(state.currentVersion().attributes()), next, changed, created, retired, key, hash, response, auth);
     }
     private static AttachmentMetadata attachment(JsonNode file, String documentId, long version, String logicalId) {
         String id = first(file, "attachmentId", "id"); if (!documentId.equals(text(file, "documentId")) || id.isEmpty() || text(file, "storageReference").isEmpty()) throw new ApiException(400, "Неверные метаданные вложения");
