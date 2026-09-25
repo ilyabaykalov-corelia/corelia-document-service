@@ -162,13 +162,11 @@ public class DocumentVersionService {
         DocumentVersionState state = state(type, id, auth); policy(type).authorize(document(state.document()), action, auth); policy(type).checkSchema(state.currentVersion().schemaVersion()); List<AttachmentMetadata> manifest = new ArrayList<>(state.currentVersion().attachments()); AttachmentMetadata old = null;
         if (!action.equals("upload")) { old = manifest.stream().filter(file -> text(body, "attachmentId").equals(file.id())).findFirst().orElseThrow(() -> new ApiException(409, "Вложение уже заменено или удалено. Обновите карточку.")); manifest.remove(old); }
         AttachmentMetadata created = null; if (!action.equals("delete")) { created = attachment(body.path("file"), id, old == null ? 1 : old.version() + 1, old == null ? "" : old.logicalId()); manifest.add(created); }
-        policy(type).validateAttachmentCount(manifest.size()); int number = state.document().currentVersion() + 1;
-        DocumentVersion next = snapshot(state.document(), number, attributes(state.currentVersion().attributes()), manifest, auth);
-        DocumentVersion changed = changed(state.currentVersion(), now(), state.currentVersion().attachments()); JsonNode response = created == null ? object("deleted", true) : publicFile(created);
-        response = copy(response).put("currentVersion", number).put("changeToken", UUID.randomUUID().toString());
+        policy(type).validateAttachmentCount(manifest.size()); DocumentVersion changed = changed(state.currentVersion(), null, manifest); JsonNode response = created == null ? object("deleted", true) : publicFile(created);
+        response = copy(response).put("currentVersion", state.document().currentVersion()).put("changeToken", UUID.randomUUID().toString());
         String retiredId = old == null ? "" : old.id();
         AttachmentMetadata retired = old == null ? null : state.attachments().stream().filter(file -> file.id().equals(retiredId)).findFirst().orElseThrow(() -> new ApiException(502, "Не найдены метаданные вложения"));
-        return commit(state, attributes(state.currentVersion().attributes()), next, changed, created, retired, key, hash, response, auth);
+        return commit(state, object(), null, changed, created, retired, key, hash, response, auth);
     }
     private static AttachmentMetadata attachment(JsonNode file, String documentId, long version, String logicalId) {
         String id = first(file, "attachmentId", "id"); if (!documentId.equals(text(file, "documentId")) || id.isEmpty() || text(file, "storageReference").isEmpty()) throw new ApiException(400, "Неверные метаданные вложения");
