@@ -154,7 +154,7 @@ public class DocumentVersionService {
                     || !Objects.equals(actual.document().changeToken(), state.document().changeToken()))
                 throw new ApiException(409, "Документ изменён другим запросом. Обновите карточку.");
             throw error;
-        } return response;
+        } return copy(response);
     }
     public JsonNode attachment(String type, String id, JsonNode body, AuthContext auth) {
         String action = text(body, "action"); if (!Set.of("upload", "replace", "delete").contains(action)) throw new ApiException(400, "Неизвестная команда вложения");
@@ -165,6 +165,7 @@ public class DocumentVersionService {
         policy(type).validateAttachmentCount(manifest.size()); int number = state.document().currentVersion() + 1;
         DocumentVersion next = snapshot(state.document(), number, attributes(state.currentVersion().attributes()), manifest, auth);
         DocumentVersion changed = changed(state.currentVersion(), now(), state.currentVersion().attachments()); JsonNode response = created == null ? object("deleted", true) : publicFile(created);
+        response = copy(response).put("currentVersion", number).put("changeToken", UUID.randomUUID().toString());
         String retiredId = old == null ? "" : old.id();
         AttachmentMetadata retired = old == null ? null : state.attachments().stream().filter(file -> file.id().equals(retiredId)).findFirst().orElseThrow(() -> new ApiException(502, "Не найдены метаданные вложения"));
         return commit(state, attributes(state.currentVersion().attributes()), next, changed, created, retired, key, hash, response, auth);
