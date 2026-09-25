@@ -131,9 +131,12 @@ public class DocumentService {
         var receipt = versionStore.receipt(creationKey, auth);
         if (receipt != null && !creationHash.equals(receipt.requestHash()))
             throw new ApiException(409, "requestId уже использован для других данных");
-        if (receipt == null)
+        if (receipt == null) {
+            java.time.Instant createdAt = java.time.Instant.now();
             store.create(new DocumentCreation(id, type, map(attributes), types.initialStatus(type),
-                    auth.login(), java.time.Instant.now(), null, creationKey, creationHash), auth);
+                    auth.login(), createdAt, null, creationKey, creationHash,
+                    object("id", "created", "timestamp", createdAt.toString(), "userLogin", auth.login(), "action", "DOCUMENT_CREATED", "documentVersion", 1)), auth);
+        }
 
         JsonNode initialAttachment = body.path("initialAttachment");
         if (initialAttachment.isObject())
