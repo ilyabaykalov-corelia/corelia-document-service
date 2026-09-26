@@ -116,6 +116,10 @@ public class DocumentController {
     public JsonNode versions(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
         return versions.versions(type, id, requests.auth(r));
     }
+    @GetMapping("/documents/{type}/{id}/history")
+    public JsonNode history(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
+        return versions.history(type, id, requests.auth(r));
+    }
     @GetMapping("/documents/{type}/{id}/versions/{version}")
     public JsonNode version(@PathVariable String type, @PathVariable String id, @PathVariable int version, HttpServletRequest r) {
         return versions.get(type, id, version, requests.auth(r));
