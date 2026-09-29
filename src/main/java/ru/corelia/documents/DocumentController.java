@@ -128,6 +128,10 @@ public class DocumentController {
     public JsonNode attachmentCommand(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
         return versions.attachment(type, id, requests.body(r), requests.auth(r));
     }
+    @PostMapping("/documents/{type}/{id}/workflow-commands/{command}")
+    public JsonNode workflowCommand(@PathVariable String type, @PathVariable String id, @PathVariable String command, HttpServletRequest r) {
+        return observability.observe("document.workflow-command", () -> versions.workflowCommand(type, id, command, requests.body(r), requests.auth(r)));
+    }
     @PostMapping("/documents/{type}/{id}/workflow-readiness")
     public JsonNode workflowReadiness(@PathVariable String type, @PathVariable String id, HttpServletRequest r) {
         return documents.startWorkflowWhenReady(type, id, requests.auth(r));
