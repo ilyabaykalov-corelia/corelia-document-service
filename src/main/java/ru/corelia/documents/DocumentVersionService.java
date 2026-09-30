@@ -175,7 +175,7 @@ public class DocumentVersionService {
         JsonNode rules = types.definition(type).workflow().path("commands").path(command);
         if (!Set.of("takeInWork", "submit", "approve", "returnForRevision", "reject", "store").contains(command) || !rules.isObject())
             throw new ApiException(400, "Workflow-команда не настроена для вида документа");
-        String key = requestKey(id, body, auth), hash = digest(write(object("action", command, "body", body)));
+        String key = requestKey(id, body, auth), hash = digest(write(object("action", command)));
         documents.get(type, id, auth); JsonNode prior = replay(key, hash, auth); if (prior != null) return prior;
         DocumentVersionState state = state(type, id, auth); policy(type).checkSchema(state.currentVersion().schemaVersion());
         if (number(body, "expectedVersion", -1) != state.document().currentVersion() || !text(body, "changeToken").equals(state.document().changeToken()))
