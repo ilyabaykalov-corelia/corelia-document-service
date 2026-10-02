@@ -43,6 +43,7 @@ public class DocumentService {
 
     public JsonNode get(String type, String id, AuthContext auth) {
         types.requireType(type);
+        if (auth != null) permissions.require(readPermission(type), auth);
         var result = copy(versions.get(type, id, null, auth));
         result.put("workflowCompleted", list(types.definition(type).workflow().path("terminalStatuses")).stream()
             .anyMatch(status -> text(status).equals(text(result, "status"))));
@@ -61,6 +62,7 @@ public class DocumentService {
 
     public JsonNode search(String type, JsonNode payload, AuthContext auth) {
         types.requireType(type);
+        if (auth != null) permissions.require(readPermission(type), auth);
         String query = text(payload, "query").toLowerCase(Locale.ROOT),
                 status = types.status(type, text(payload, "status"));
         if (!text(payload, "status").isEmpty() && status == null) return object("items", List.of(), "total", 0);
@@ -116,6 +118,12 @@ public class DocumentService {
 
     public JsonNode update(String type, String id, JsonNode body, AuthContext auth) {
         return versions.update(type, id, body, auth);
+    }
+
+    private String readPermission(String type) {
+        JsonNode rules = types.definition(type).authorization();
+        String configured = text(rules, "readPermission");
+        return configured.isEmpty() ? text(rules, "editPermission") : configured;
     }
 
     public JsonNode create(String type, JsonNode body, AuthContext auth) {
