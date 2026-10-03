@@ -1,28 +1,19 @@
 # corelia-document-service
 
-Универсальные карточки документов с отображением модели и прав Platform V.
+Владелец document business rules: валидации конфигурационных атрибутов,
+capabilities, optimistic locking, idempotency и оркестрации команд документа.
+Сервис не владеет чужими базами, S3 и BPMN engine: использует provider SPI и
+внутренние API data-, attachment- и workflow-service.
 
-Java 25, Spring Boot 4.0.8, Maven. Комментарии и документация — на русском языке.
-
-## Сборка и запуск
-
-Это отдельный Git-репозиторий сервиса внутри рабочего каталога Corelia. Для сборки требуются соседний родительский `corelia-parent` и общие библиотеки Corelia. Из каталога сервиса:
+Публикует только `/internal/v1` для gateway и авторизованных сервисов. В
+Compose использует native-data и native-permissions provider; конфигурационный
+release монтируется read-only. Для запуска требуются mTLS, доступ к data,
+attachment и workflow services и `CORELIA_CONFIG_PATH`.
 
 ```bash
-mvn -f ../pom.xml -pl corelia-document-service -am package -DskipTests
+mvn -pl corelia-document-service -am test
+./scripts/up.sh
 ```
 
-Локальное окружение запускается из общей папки Corelia командой `./scripts/up.sh`. Сертификаты и адреса сервисов настраиваются через Compose и переменные окружения. Секреты и результаты сборки в репозиторий не включаются.
-
-Для сборки отдельно от общей папки потребуется публикация родительского POM и библиотек в Maven-репозиторий. Общая Docker-конфигурация находится в родительском репозитории Corelia.
-
-## Документация рабочего окружения
-
-- [Архитектура](../docs/architecture.md)
-- [API](../docs/api.md)
-- [Локальная эксплуатация](../docs/operations.md)
-
-Правила изменения документов принадлежат document-service; постоянное хранение находится в DataSpace/DAM, существующие процессы исполняются платформой. Системные тесты взаимодействия находятся в соседнем модуле `corelia-system-tests`.
-# Документация
-
-Владение документом, transaction boundaries и versioning описаны в [docs/README.md](docs/README.md).
+Внешний контракт описан в [API](../docs/api.md), версии — в
+[document-versioning](../docs/document-versioning.md).
