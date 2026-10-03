@@ -169,9 +169,10 @@ public class DocumentService {
     /** Запускает процесс только для уже сохранённого документа, когда выполнены configured prerequisites. */
     public JsonNode startWorkflowWhenReady(String type, String id, AuthContext auth) {
         types.requireType(type);
+        if (!types.initialAttachmentRequired(type))
+            return object("started", false, "documentId", id, "state", "ALREADY_READY");
         var document = store.get(type, id, auth);
-        if (types.initialAttachmentRequired(type)
-                && versionStore.attachments(id, auth).stream().noneMatch(ru.corelia.provider.model.AttachmentMetadata::current))
+        if (versionStore.attachments(id, auth).stream().noneMatch(ru.corelia.provider.model.AttachmentMetadata::current))
             return object("started", false, "documentId", id, "state", "WAITING_FOR_ATTACHMENT");
         return startWorkflow(type, id, attributes(document.attributes()), "", "", auth);
     }

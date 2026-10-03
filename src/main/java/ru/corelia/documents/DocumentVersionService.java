@@ -203,7 +203,7 @@ public class DocumentVersionService {
         String retiredId = old == null ? "" : old.id();
         AttachmentMetadata retired = old == null ? null : state.attachments().stream().filter(file -> file.id().equals(retiredId)).findFirst().orElseThrow(() -> new ApiException(502, "Не найдены метаданные вложения"));
         JsonNode event = attachmentEvent(state.currentVersion(), action, old, created, auth);
-        return commit(state, object(), null, changed, created, retired, key, hash, response, event, null, auth);
+        return commit(state, attributes(state.currentVersion().attributes()), null, changed, created, retired, key, hash, response, event, null, auth);
     }
     private JsonNode attributeEvent(DocumentVersion current, DocumentVersion previous, String type) {
         var changes = new ArrayList<JsonNode>();
