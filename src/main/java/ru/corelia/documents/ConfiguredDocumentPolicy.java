@@ -33,7 +33,8 @@ public final class ConfiguredDocumentPolicy implements DocumentPolicy {
     }
     public void authorize(JsonNode doc, String action, AuthContext auth, JsonNode workflow) {
         JsonNode rules = types.definition(type).authorization();
-        permissions.require(text(rules, "editPermission"), auth);
+        String attachmentAdd = text(rules, "attachmentAddPermission");
+        permissions.require(action.equals("upload") && !attachmentAdd.isEmpty() ? attachmentAdd : text(rules, "editPermission"), auth);
         String status = text(doc, "status");
         if (action.equals("upload") && list(rules.path("initialUploadStatuses")).stream().anyMatch(v -> text(v).equals(status)) && auth.login().equals(text(doc, "createdBy"))) return;
         if (list(rules.path("editableStatuses")).stream().noneMatch(v -> text(v).equals(status))) throw new ApiException(409, "Документ недоступен для изменения на текущем шаге");

@@ -157,10 +157,10 @@ public class DocumentVersionService {
         DocumentVersion closed = differs ? changed(state.currentVersion(), now(), state.currentVersion().attachments()) : null;
         JsonNode response = copy(view(type, state, created == null ? state.currentVersion() : created)).put("currentVersion", number).put("changeToken", UUID.randomUUID().toString());
         JsonNode event = differs ? attributeEvent(created, state.currentVersion(), type) : null;
-        return commit(state, attrs, created, closed, null, null, key, hash, response, event, auth);
+        return commit(state, attrs, created, closed, null, null, key, hash, response, event, null, auth);
     }
-    private JsonNode commit(DocumentVersionState state, ObjectNode attributes, DocumentVersion created, DocumentVersion changed, AttachmentMetadata file, AttachmentMetadata retired, String key, String hash, JsonNode response, JsonNode history, AuthContext auth) {
-        try { versions.commit(new DocumentMutation(state.document().id(), state.document().typeCode(), state.document().currentVersion(), state.document().changeToken(), map(attributes), created, changed, file, retired, key, hash, response, history), auth); }
+    private JsonNode commit(DocumentVersionState state, ObjectNode attributes, DocumentVersion created, DocumentVersion changed, AttachmentMetadata file, AttachmentMetadata retired, String key, String hash, JsonNode response, JsonNode history, String status, AuthContext auth) {
+        try { versions.commit(new DocumentMutation(state.document().id(), state.document().typeCode(), state.document().currentVersion(), state.document().changeToken(), map(attributes), created, changed, file, retired, key, hash, response, history, status), auth); }
         catch (ApiException error) {
             JsonNode prior = replay(key, hash, auth); if (prior != null) return prior;
             DocumentVersionState actual = versions.state(state.document().typeCode(), state.document().id(), auth);
@@ -169,6 +169,28 @@ public class DocumentVersionService {
                 throw new ApiException(409, "Документ изменён другим запросом. Обновите карточку.");
             throw error;
         } return copy(response);
+    }
+    /** Выполняет явно разрешённый workflow-переход без универсального изменения статуса. */
+    public JsonNode workflowCommand(String type, String id, String command, JsonNode body, AuthContext auth) {
+        JsonNode rules = types.definition(type).workflow().path("commands").path(command);
+        if (!Set.of("takeInWork", "submit", "approve", "returnForRevision", "reject", "store").contains(command) || !rules.isObject())
+            throw new ApiException(400, "Workflow-команда не настроена для вида документа");
+        String key = requestKey(id, body, auth), hash = digest(write(object("action", command)));
+        documents.get(type, id, auth); JsonNode prior = replay(key, hash, auth); if (prior != null) return prior;
+        DocumentVersionState state = state(type, id, auth); policy(type).checkSchema(state.currentVersion().schemaVersion());
+        if (number(body, "expectedVersion", -1) != state.document().currentVersion() || !text(body, "changeToken").equals(state.document().changeToken()))
+            throw new ApiException(409, "Документ или вложения изменены. Повторите workflow-команду с актуальным состоянием.");
+        String previous = state.document().status(), target = text(rules, "to");
+        if (list(rules.path("from")).stream().noneMatch(value -> previous.equals(text(value))))
+            throw new ApiException(409, "Workflow-команда недопустима для текущего статуса документа");
+        DocumentVersion created = new DocumentVersion("", id, state.document().currentVersion() + 1, policy(type).schemaVersion(),
+                state.currentVersion().attributes(), target, now(), auth.login(), null, state.currentVersion().attachments());
+        DocumentVersion closed = changed(state.currentVersion(), now(), state.currentVersion().attachments());
+        JsonNode response = copy(view(type, state, created)).put("status", target).put("statusLabel", types.label(type, target))
+                .put("statusTone", types.tone(type, target)).put("currentVersion", created.number()).put("changeToken", UUID.randomUUID().toString());
+        JsonNode event = event(created.number() + ":WORKFLOW_COMMAND:" + command, created.createdAt(), auth.login(), "WORKFLOW_COMMAND", created.number(),
+                array(List.of(object("command", command, "oldStatus", previous, "newStatus", target))), null);
+        return commit(state, attributes(state.currentVersion().attributes()), created, closed, null, null, key, hash, response, event, target, auth);
     }
     public JsonNode attachment(String type, String id, JsonNode body, AuthContext auth) {
         String action = text(body, "action"); if (!Set.of("upload", "replace", "delete").contains(action)) throw new ApiException(400, "Неизвестная команда вложения");
@@ -181,7 +203,7 @@ public class DocumentVersionService {
         String retiredId = old == null ? "" : old.id();
         AttachmentMetadata retired = old == null ? null : state.attachments().stream().filter(file -> file.id().equals(retiredId)).findFirst().orElseThrow(() -> new ApiException(502, "Не найдены метаданные вложения"));
         JsonNode event = attachmentEvent(state.currentVersion(), action, old, created, auth);
-        return commit(state, object(), null, changed, created, retired, key, hash, response, event, auth);
+        return commit(state, attributes(state.currentVersion().attributes()), null, changed, created, retired, key, hash, response, event, null, auth);
     }
     private JsonNode attributeEvent(DocumentVersion current, DocumentVersion previous, String type) {
         var changes = new ArrayList<JsonNode>();
